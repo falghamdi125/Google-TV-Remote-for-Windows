@@ -191,16 +191,27 @@ class MockRemoteServer(MockServer):
     """The TV half of the remote-control session."""
 
     def __init__(self, context: ssl.SSLContext, connections: int = 1,
-                 drop_first: bool = False) -> None:
+                 drop_first: bool = False, echo_edits: bool = True) -> None:
         super().__init__(context, connections)
         self.drop_first = drop_first
+        self.echo_edits = echo_edits
         self.configure_code = None
         self.set_active = None
         self.ping_reply = None
         self.keys: list[tuple[int, int]] = []
         self.app_links: list[str] = []
         self.texts: list[dict] = []
+        self.field_value = ""                            # the focused search box
+        self.field_counter = 7
         self.handshake_done = threading.Event()
+
+    def field_status(self) -> bytes:
+        """RemoteImeShowRequest with the field's current contents, as the TV
+        sends after every edit it accepts."""
+        status = (Writer().varint(1, self.field_counter).string(2, self.field_value)
+                  .string(6, "Search"))
+        show = Writer().message(2, status)
+        return Writer().message(messages.RM_IME_SHOW_REQUEST, show).delimited()
 
     def serve(self, conn: ssl.SSLSocket) -> None:
         reader = DelimitedReader()
@@ -239,14 +250,18 @@ class MockRemoteServer(MockServer):
             if batch is not None:
                 edit = get_message(batch, 3) or {}
                 field = get_message(edit, 2) or {}
+                start, end = get_varint(field, 1), get_varint(field, 2)
+                value = get_string(field, 3)
                 self.texts.append({
                     "ime_counter": get_varint(batch, 1),
                     "field_counter": get_varint(batch, 2),
                     "insert": get_varint(edit, 1),
-                    "start": get_varint(field, 1),
-                    "end": get_varint(field, 2),
-                    "value": get_string(field, 3),
+                    "start": start, "end": end, "value": value,
                 })
+                if self.echo_edits:
+                    self.field_value = self.field_value[:start] + value + self.field_value[end:]
+                    self.field_counter += 1
+                    conn.sendall(self.field_status())
 
 
 class MockRejectingServer(MockServer):
@@ -379,21 +394,47 @@ class MockTVTest(unittest.TestCase):
         client.send_key(keycodes.KEYCODE_DPAD_UP)
         client.send_key(keycodes.KEYCODE_DPAD_CENTER)
         client.launch_app("https://www.youtube.com")
-        client.send_text("Hi 5!")
+        client.send_text("Hi 5!")                       # appended to the empty field
+        self.assertEqual(client.text_value, "Hi 5!")    # from the TV's echo
+        client.delete_text()
+        self.assertEqual(client.text_value, "Hi 5")
+        client.clear_text()
+        self.assertEqual(client.text_value, "")
         with self.assertRaises(ValueError):
             client.send_text("")
+        with self.assertRaises(ValueError):
+            client.delete_text()                        # nothing left to delete
 
         expected = [(keycodes.KEYCODE_DPAD_UP, keycodes.SHORT),
                     (keycodes.KEYCODE_DPAD_CENTER, keycodes.SHORT)]
-        self.assertTrue(wait_for(lambda: server.texts))
         self.assertEqual(server.keys, expected)
         self.assertEqual(server.app_links, ["https://www.youtube.com"])
-        self.assertEqual(server.texts, [{"ime_counter": 3, "field_counter": 7, "insert": 1,
-                                         "start": 4, "end": 4, "value": "Hi 5!"}])
+        # Each edit echoes the counter the TV reported after the previous one.
+        self.assertEqual(server.texts, [
+            {"ime_counter": 3, "field_counter": 7, "insert": 1,
+             "start": 0, "end": 0, "value": "Hi 5!"},
+            {"ime_counter": 3, "field_counter": 8, "insert": 1,
+             "start": 4, "end": 5, "value": ""},
+            {"ime_counter": 3, "field_counter": 9, "insert": 1,
+             "start": 0, "end": 4, "value": ""},
+        ])
 
         client.stop()
         self.assertFalse(client.is_connected)
         self.assertEqual(states, ["connecting", "connected", "disconnected"])
+
+    def test_unconfirmed_edits_are_reported(self):
+        server = MockRemoteServer(self.tv_context(), echo_edits=False)
+        server.start()
+        fields: list = []
+        client = self.remote_client(server, on_field=fields.append)
+        client.start()
+        self.assertTrue(client.wait_until_connected(10))
+        self.assertTrue(wait_for(lambda: client.text_field is not None))
+        self.assertEqual(fields, ["Search"])
+        with self.assertRaisesRegex(ValueError, "did not accept"):
+            client.send_text("hello")
+        self.assertEqual(client.text_value, "", "unconfirmed edit does not change the model")
 
     def test_reconnects_when_the_tv_drops_the_link(self):
         server = MockRemoteServer(self.tv_context(), connections=2, drop_first=True)
@@ -431,6 +472,8 @@ class MockTVTest(unittest.TestCase):
         client = RemoteClient(LOCALHOST, port=1, cert_dir=self.workdir)
         with self.assertRaises(ConnectionError):
             client.send_key(keycodes.KEYCODE_HOME)
+        with self.assertRaises(ValueError):             # no text field known
+            client.send_text("hello")
 
 
 if __name__ == "__main__":

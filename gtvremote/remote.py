@@ -22,6 +22,9 @@ REMOTE_PORT = 6466
 SOCKET_TIMEOUT = 15.0
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 15.0
+# The TV echoes every text edit it accepts within a few ms; silence means
+# it was dropped (no field focused, or stale counters).
+EDIT_ECHO_TIMEOUT = 1.5
 
 # How this remote introduces itself to the TV.
 DEVICE_MODEL = "Windows PC"
@@ -53,7 +56,8 @@ class RemoteClient:
                  on_state: Callable[[str, str], None] | None = None,
                  on_volume: Callable[[int, int, bool], None] | None = None,
                  on_power: Callable[[bool], None] | None = None,
-                 on_app: Callable[[str], None] | None = None) -> None:
+                 on_app: Callable[[str], None] | None = None,
+                 on_field: Callable[[str | None], None] | None = None) -> None:
         self.host = host
         self.port = port
         self.model = model
@@ -66,6 +70,9 @@ class RemoteClient:
         self.on_volume = on_volume or (lambda level, maximum, muted: None)
         self.on_power = on_power or (lambda on: None)
         self.on_app = on_app or (lambda package: None)
+        # Called with the label of the text field the TV has focused, or
+        # None when it goes away.
+        self.on_field = on_field or (lambda label: None)
 
         self._sock: ssl.SSLSocket | None = None
         self._send_lock = threading.Lock()
@@ -80,10 +87,13 @@ class RemoteClient:
         self.volume_muted = False
         self.powered: bool | None = None
         self.current_app = ""
-        # The TV's text-field counters, echoed back when typing (see send_text).
+        # The focused text field, as reported by the TV (see send_text): its
+        # label, current contents, and the counters every edit must echo.
+        self.text_field: str | None = None
+        self.text_value: str = ""
         self._ime_counter = 0
         self._field_counter = 0
-        self.text_field: str | None = None      # label of the focused field, if any
+        self._field_echo = threading.Event()
 
     # -- lifecycle --------------------------------------------------------
 
@@ -227,14 +237,32 @@ class RemoteClient:
             if package and package != self.current_app:
                 self.current_app = package
                 self.on_app(package)
+                if "field_counter" not in msg and self.text_field is not None:
+                    self.text_field = None          # a different app: the field is gone
+                    self.text_value = ""
+                    self.on_field(None)
             if "field_counter" in msg:
-                self.text_field = msg.get("field_label", "")
-                self._note_field_counter(msg["field_counter"])
+                self._note_field(msg.get("field_label", ""), msg.get("field_value", ""),
+                                 msg["field_counter"])
         elif kind == "ime_show_request":
-            self._note_field_counter(msg.get("counter_field", 0))
+            self._note_field(msg.get("label", ""), msg.get("value", ""),
+                             msg.get("counter_field", 0))
         elif kind == "ime_batch_edit":
-            self._ime_counter = msg.get("ime_counter", 0)
-            self._note_field_counter(msg.get("field_counter", 0))
+            # Zero shows up both when a field loses focus and, sometimes,
+            # right after an accepted edit, so it proves nothing; only ever
+            # move to a real counter.
+            if msg.get("ime_counter"):
+                self._ime_counter = msg["ime_counter"]
+                self._note_field_counter(msg.get("field_counter", 0))
+
+    def _note_field(self, label: str, value: str, counter: int) -> None:
+        appeared = self.text_field is None
+        self.text_field = label
+        self.text_value = value
+        self._note_field_counter(counter)
+        self._field_echo.set()
+        if appeared:
+            self.on_field(label)
 
     def _note_field_counter(self, counter: int) -> None:
         # The TV reports 0 in its RemoteImeBatchEdit while the field status
@@ -265,24 +293,44 @@ class RemoteClient:
         """Open a deep link, e.g. https://www.youtube.com or a market:// URI."""
         self._send_raw(messages.remote_app_link_launch(app_link))
 
-    def send_text(self, text: str) -> None:
-        """Type ``text`` into the text field currently focused on the TV.
+    # -- text field -------------------------------------------------------
+    # All three go through the TV's input method, as the official app does,
+    # rather than through key presses (which the on-screen keyboard
+    # swallows), so any Unicode text works. They raise ValueError when the
+    # TV has never reported a focused text field (e.g. a search box) or
+    # does not confirm the edit.
 
-        Goes through the TV's input method, as the official app does, rather
-        than through key presses (which the on-screen keyboard swallows), so
-        any Unicode text works. The text is appended to what the field
-        already holds. The TV must have a text field focused, e.g. a search
-        box; otherwise nothing happens.
-        """
+    def send_text(self, text: str) -> None:
+        """Append ``text`` to the text field focused on the TV."""
         if not text:
             raise ValueError("text is empty")
-        self._send_raw(messages.remote_ime_batch_edit(
-            self._ime_counter, self._field_counter, text))
+        length = self._focused_field_length()
+        self._edit_field(length, length, text)
 
     def delete_text(self) -> None:
-        """Delete the last character of the focused field (not yet supported)."""
-        raise ValueError("Deleting text on the TV is not supported yet.")
+        """Delete the last character of the focused text field."""
+        length = self._focused_field_length()
+        if length == 0:
+            raise ValueError("The text field on the TV is already empty.")
+        self._edit_field(length - 1, length, "")
 
     def clear_text(self) -> None:
-        """Clear the focused field (not yet supported)."""
-        raise ValueError("Clearing the TV's text field is not supported yet.")
+        """Empty the focused text field."""
+        length = self._focused_field_length()
+        if length == 0:
+            raise ValueError("The text field on the TV is already empty.")
+        self._edit_field(0, length, "")
+
+    def _focused_field_length(self) -> int:
+        if self.text_field is None:
+            raise ValueError("No text field is focused on the TV.")
+        return len(self.text_value)
+
+    def _edit_field(self, start: int, end: int, text: str) -> None:
+        self._field_echo.clear()
+        self._send_raw(messages.remote_ime_batch_edit(
+            self._ime_counter, self._field_counter, text, start, end))
+        # The echo carries the field's new contents and counter (see _note_field).
+        if not self._field_echo.wait(EDIT_ECHO_TIMEOUT):
+            raise ValueError("The TV did not accept the edit. Put the cursor in the text box "
+                             "on the TV (close its on-screen keyboard) and try again.")

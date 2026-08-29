@@ -50,12 +50,14 @@ Pairing is remembered: the app keeps a client certificate in
 | Play / Pause | Space |
 | Volume | `+` / `-`, mute with `M` |
 | Input | Opens a menu of the TV's inputs. On TCL sets these switch directly (HDMI 1-4, AV, tuner); other makers get the input-picker / HDMI key codes, which only some TVs honour. See *Settings* to add your own |
-| Type text | Type in the box and press Enter (or ➤). Delivered through the TV's input method into whatever text field the TV has focused, so select a search box on the TV first. ⌫ deletes the last character on the TV, ✕ clears the field; OK / Enter then submits the search |
+| Type text | Put the cursor in a text box on the TV (a search box, say) and just type: keystrokes go to the TV, Backspace deletes, Enter submits. The text box in the app does the same in one go (Enter or ➤), ⌫ deletes the last character on the TV and ✕ clears the field |
 | Apps | One-tap icons for YouTube, Netflix, Prime Video, Disney+ and Spotify (hover for the name) |
 | Resize the interface | `Ctrl` `+` / `Ctrl` `-`, `Ctrl` `0` to reset |
 
 Arrow and volume buttons auto-repeat when held. The status bar shows the
-live volume, power state and foreground app, all pushed by the TV.
+live volume, power state and foreground app, all pushed by the TV, and
+says when a TV text box is active. Keyboard shortcuts work whenever the
+window is focused and the cursor is not in one of its own text boxes.
 
 ### Settings
 
@@ -124,9 +126,11 @@ varint length prefix.
 * **6466 - control.** The TV drives the handshake: it sends `RemoteConfigure`,
   the client answers with its device info, then `RemoteSetActive` is echoed
   back. The TV pings every ~5 s and the client must respond or be dropped.
-  Key presses are `RemoteKeyInject` messages carrying an Android key code;
-  text goes through `RemoteImeBatchEdit`, echoing the field counters the TV
-  announced when a text box gained focus.
+  Key presses are `RemoteKeyInject` messages carrying an Android key code.
+  Text editing goes through `RemoteImeBatchEdit`, which replaces a character
+  range of the focused field; it must echo the counters the TV announced
+  when the field gained focus, and the TV reports the field's new contents
+  after every edit.
 
 `gtvremote/protobuf_lite.py` is a ~150-line protobuf implementation covering
 just the wire types this protocol uses, so the app has no protobuf dependency.
@@ -190,9 +194,11 @@ and by some VPNs. Enter the IP address manually instead.
 **Nothing happens when a key is pressed** - check the status dot is green.
 Power is a toggle on most devices; some only wake over HDMI-CEC.
 
-**Typed text does not appear** - text is delivered to whichever text field
-the TV has focused. Select the field first (the on-screen keyboard or a
-blinking cursor shows it is active), then press Type.
+**"No text field is focused" / "The TV did not accept the edit"** - text is
+delivered to whichever text field the TV has focused. Select the field
+first (the on-screen keyboard or a blinking cursor shows it is active), then
+type; the TV confirms every edit it applies, and the app reports when it
+does not.
 
 **Input does nothing** - on non-TCL sets the menu sends key codes, which
 many makers ignore (and streaming dongles have no inputs). Add your TV's

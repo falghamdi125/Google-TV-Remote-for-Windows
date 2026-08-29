@@ -150,7 +150,7 @@ class ParseRemoteTest(unittest.TestCase):
         info = get_message(configure, 2)
         self.assertEqual([get_string(info, f) for f in (1, 2, 5, 6)], ["M", "V", "pkg", "1.2"])
 
-        (body,) = DelimitedReader().feed(messages.remote_ime_batch_edit(3, 7, "héllo"))
+        (body,) = DelimitedReader().feed(messages.remote_ime_batch_edit(3, 7, "héllo", 4, 4))
         batch = get_message(decode(body), messages.RM_IME_BATCH_EDIT)
         self.assertEqual((get_varint(batch, 1), get_varint(batch, 2)), (3, 7))
         edit = get_message(batch, 3)

@@ -393,7 +393,9 @@ class RemoteApp:
             "<m>": keycodes.KEYCODE_VOLUME_MUTE,
         }
         for sequence, code in mapping.items():
-            self.root.bind(sequence, lambda _event, c=code: self._hotkey(c))
+            self.root.bind(sequence, lambda event, c=code: self._hotkey(c, event))
+        # Everything else: live typing into a text box focused on the TV.
+        self.root.bind("<Key>", self._on_key)
 
         # Ctrl +/- resizes the whole interface; Ctrl+0 restores the default.
         for sequence in ("<Control-plus>", "<Control-equal>", "<Control-KP_Add>"):
@@ -402,12 +404,42 @@ class RemoteApp:
             self.root.bind(sequence, lambda _e: self.set_scale(theme.SCALE - theme.SCALE_STEP))
         self.root.bind("<Control-Key-0>", lambda _e: self.set_scale(theme.DEFAULT_SCALE))
 
-    def _hotkey(self, key_code: int):
-        # Let the text boxes keep normal typing behaviour.
-        if self.root.focus_get() in (self.text_entry, self.host_entry):
+    def _typing_in_app(self) -> bool:
+        """True while one of the window's own text boxes has keyboard focus."""
+        return self.root.focus_get() in (self.text_entry, self.host_entry)
+
+    def _tv_typing(self) -> bool:
+        """True while the TV reports a focused text box: keystrokes go to it."""
+        return self._is_connected() and self.client.text_field is not None
+
+    def _hotkey(self, key_code: int, event):
+        if self._typing_in_app():
             return None
+        if self._tv_typing():
+            if event.keysym == "BackSpace":
+                self._edit_tv_text(self.client.delete_text, "Deleted a character on the TV")
+                return "break"
+            if event.keysym == "Return":
+                self.send_key(keycodes.KEYCODE_ENTER)           # submit the search
+                return "break"
+            if len(event.char) == 1 and event.char.isprintable():
+                self._type_char(event.char)                     # space, +, -, m ...
+                return "break"
         self.send_key(key_code)
         return "break"
+
+    def _on_key(self, event):
+        """Live typing: while the TV has a text box focused, printable
+        keystrokes go straight to it."""
+        if self._typing_in_app() or not self._tv_typing():
+            return None
+        if len(event.char) != 1 or not event.char.isprintable():
+            return None
+        self._type_char(event.char)
+        return "break"
+
+    def _type_char(self, char: str) -> None:
+        self._edit_tv_text(lambda: self.client.send_text(char), f"Typed {char!r} on the TV")
 
     # ----------------------------------------------------------- actions --
 
@@ -456,10 +488,12 @@ class RemoteApp:
             on_volume=lambda level, maximum, muted: self._post(("volume", level, maximum, muted)),
             on_power=lambda on: self._post(("power", on)),
             on_app=lambda package: self._post(("app", package)),
+            on_field=lambda label: self._post(("field", label)),
         )
         self.client.start()
         self.settings["last_host"] = host
         config.save(self.settings)
+        self.root.focus_set()           # take focus off the IP box so hotkeys work
 
     def disconnect(self, update_ui: bool = True) -> None:
         if self.client:
@@ -534,6 +568,9 @@ class RemoteApp:
             return
         try:
             self.client.send_text(text)
+        except ValueError as exc:                       # no field focused on the TV
+            self._set_status("error", str(exc))
+            return
         except OSError as exc:
             self._set_status("error", f"Typing failed: {exc}")
             return
@@ -541,18 +578,21 @@ class RemoteApp:
         self.text_var.set("")
 
     def backspace(self) -> None:
-        self._edit_tv_text("delete_text", "Deleted the last character")
+        if self._is_connected():
+            self._edit_tv_text(self.client.delete_text, "Deleted the last character")
+        else:
+            self._set_status("error", "Not connected.")
 
     def clear_text(self) -> None:
-        self._edit_tv_text("clear_text", "Cleared the text field")
-
-    def _edit_tv_text(self, method: str, done: str) -> None:
-        if not self._is_connected():
+        if self._is_connected():
+            self._edit_tv_text(self.client.clear_text, "Cleared the text field")
+        else:
             self._set_status("error", "Not connected.")
-            return
+
+    def _edit_tv_text(self, action, done: str) -> None:
         try:
-            getattr(self.client, method)()
-        except ValueError as exc:                       # no field focused / nothing to delete
+            action()
+        except ValueError as exc:                       # no field focused / not accepted
             self._set_status("error", str(exc))
             return
         except OSError as exc:
@@ -690,6 +730,11 @@ class RemoteApp:
             self._set_app_text("TV is on" if event[1] else "TV is in standby")
         elif kind == "app":
             self._set_app_text(event[1])
+        elif kind == "field":
+            if event[1] is not None:
+                self._set_status("connected", "TV text box active - just type; Enter submits")
+            elif self._last_status == "connected" and self.client:
+                self._set_status("connected", f"Connected to {self.client.host}")
         elif kind == "devices":
             self._show_devices(event[1])
         elif kind == "pair_code":

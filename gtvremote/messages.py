@@ -157,17 +157,18 @@ def remote_app_link_launch(app_link: str) -> bytes:
     return Writer().message(RM_APP_LINK_LAUNCH_REQUEST, body).delimited()
 
 
-def remote_ime_batch_edit(ime_counter: int, field_counter: int, text: str) -> bytes:
-    """Append ``text`` to the text field focused on the TV.
+def remote_ime_batch_edit(ime_counter: int, field_counter: int, text: str,
+                          start: int, end: int) -> bytes:
+    """Replace characters ``[start, end)`` of the focused text field with ``text``.
 
-    ``ime_counter`` must be the one the TV sent in its own RemoteImeBatchEdit
-    (a mismatch is silently dropped). ``field_counter`` is the focused
-    field's ``counter_field``, which the TV bumps after every edit and
-    reports in RemoteImeKeyInject / RemoteImeShowRequest. Verified against a
-    TCL Google TV; the caret placement follows the official client.
+    ``start == end`` inserts; an empty ``text`` deletes. ``ime_counter`` must
+    be the one the TV sent in its own RemoteImeBatchEdit and ``field_counter``
+    the focused field's ``counter_field`` (bumped by the TV after every edit
+    and reported in RemoteImeKeyInject / RemoteImeShowRequest); the TV
+    silently drops edits whose counters do not match. Verified against a
+    TCL Google TV.
     """
-    caret = max(len(text) - 1, 0)
-    ime_object = Writer().varint(1, caret).varint(2, caret).string(3, text)
+    ime_object = Writer().varint(1, start).varint(2, end).string(3, text)
     edit = Writer().varint(1, 1).message(2, ime_object)           # insert = 1
     body = Writer().varint(1, ime_counter).varint(2, field_counter).message(3, edit)
     return Writer().message(RM_IME_BATCH_EDIT, body).delimited()

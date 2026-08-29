@@ -62,7 +62,7 @@ CASES = [
      messages.remote_app_link_launch("https://www.youtube.com"),
      {"remoteAppLinkLaunchRequest": {"appLink": "https://www.youtube.com"}}),
     ("ime_batch_edit", REMOTE,
-     messages.remote_ime_batch_edit(3, 7, "hello world"),
+     messages.remote_ime_batch_edit(3, 7, "hello world", 10, 10),
      {"remoteImeBatchEdit": {
          "imeCounter": 3, "fieldCounter": 7,
          "editInfo": [{"insert": 1,

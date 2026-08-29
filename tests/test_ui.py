@@ -7,7 +7,7 @@ import tkinter as tk
 import unittest
 from unittest import mock
 
-from gtvremote import config
+from gtvremote import config, keycodes
 from gtvremote.ui import RemoteApp, icons, theme, window
 
 SETTINGS = {**config.DEFAULTS, "auto_connect": False, "window_geometry": ""}
@@ -110,6 +110,40 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.app.status_var.get(), "Not connected.")
         self.assertEqual(self.app.text_var.get(), "hello", "text kept for a retry")
 
+    def test_keyboard_types_on_the_tv_while_a_field_is_focused(self):
+        client = mock.Mock(is_connected=True, text_field="Search")
+        self.app.client = client
+
+        def key(char, keysym):
+            return mock.Mock(char=char, keysym=keysym)
+
+        self.assertEqual(self.app._on_key(key("a", "a")), "break")
+        client.send_text.assert_called_once_with("a")
+        self.assertEqual(self.app._hotkey(keycodes.KEYCODE_VOLUME_MUTE, key("m", "m")), "break")
+        client.send_text.assert_called_with("m")
+        self.app._hotkey(keycodes.KEYCODE_BACK, key("\x08", "BackSpace"))
+        client.delete_text.assert_called_once_with()
+        self.app._hotkey(keycodes.KEYCODE_DPAD_CENTER, key("\r", "Return"))
+        client.send_key.assert_called_with(keycodes.KEYCODE_ENTER)
+        self.app._hotkey(keycodes.KEYCODE_DPAD_UP, key("", "Up"))
+        client.send_key.assert_called_with(keycodes.KEYCODE_DPAD_UP)
+        self.assertIsNone(self.app._on_key(key("\x03", "c")), "control chars are ignored")
+
+        client.text_field = None                        # no text box on the TV
+        self.assertIsNone(self.app._on_key(key("a", "a")))
+        self.app._hotkey(keycodes.KEYCODE_DPAD_CENTER, key("\r", "Return"))
+        client.send_key.assert_called_with(keycodes.KEYCODE_DPAD_CENTER)
+        self.app._hotkey(keycodes.KEYCODE_VOLUME_MUTE, key("m", "m"))
+        client.send_key.assert_called_with(keycodes.KEYCODE_VOLUME_MUTE)
+
+    def test_field_events_update_the_status(self):
+        self.app._handle_event(("state", "connected", "Connected to 10.0.0.5"))
+        self.app._handle_event(("field", "Search"))
+        self.assertIn("just type", self.app.status_var.get())
+        self.app.client = mock.Mock(is_connected=True, host="10.0.0.5")
+        self.app._handle_event(("field", None))
+        self.assertEqual(self.app.status_var.get(), "Connected to 10.0.0.5")
+
     def test_backspace_and_clear_edit_the_tv_field(self):
         client = mock.Mock(is_connected=True)
         self.app.client = client
@@ -130,6 +164,12 @@ class WindowTest(unittest.TestCase):
         client.send_text.assert_called_once_with("hello")
         self.assertEqual(self.app.text_var.get(), "")
         self.assertEqual(self.app.status_var.get(), "Text sent to the TV")
+
+        client.send_text.side_effect = ValueError("No text field is focused on the TV.")
+        self.app.text_var.set("again")
+        self.app.send_text()
+        self.assertEqual(self.app.status_var.get(), "No text field is focused on the TV.")
+        self.assertEqual(self.app.text_var.get(), "again", "text kept for a retry")
 
     def test_input_switch_launches_the_passthrough_link(self):
         client = mock.Mock(is_connected=True, tv_vendor="TCL")
