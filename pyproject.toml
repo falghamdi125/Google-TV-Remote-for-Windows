@@ -24,6 +24,11 @@ classifiers = [
 ]
 dependencies = ["cryptography>=41.0"]
 
+[project.urls]
+Homepage = "https://github.com/falghamdi125/google-tv-remote"
+Releases = "https://github.com/falghamdi125/google-tv-remote/releases"
+Issues = "https://github.com/falghamdi125/google-tv-remote/issues"
+
 [project.optional-dependencies]
 build = ["pyinstaller>=6"]
 dev = ["pillow"]
