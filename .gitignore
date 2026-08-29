@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller output (build_exe.bat regenerates the .spec as well)
+build/
+dist/
+*.spec
+
+# protobufjs cross-check (tests/package.json)
+tests/node_modules/
+
+# tools/screenshot_ui.py output
+ui_preview.png

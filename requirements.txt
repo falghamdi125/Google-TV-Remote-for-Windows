@@ -1,0 +1,7 @@
+# Runtime dependency. Everything else (TLS, protobuf encoding, mDNS, GUI)
+# is built on the Python standard library.
+cryptography>=41.0
+
+# Optional:
+#   pip install pyinstaller   # build the standalone .exe (build_exe.bat)
+#   pip install pillow        # tools/screenshot_ui.py

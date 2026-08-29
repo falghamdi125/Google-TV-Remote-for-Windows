@@ -1,0 +1,152 @@
+[
+ {
+  "name": "pairing_request",
+  "type": "pairing.PairingMessage",
+  "hex": "22080210c801521b0a13636f6d2e6578616d706c652f7365727669636512044d795043",
+  "expected": {
+   "protocolVersion": 2,
+   "status": "STATUS_OK",
+   "pairingRequest": {
+    "serviceName": "com.example/service",
+    "clientName": "MyPC"
+   }
+  }
+ },
+ {
+  "name": "pairing_option",
+  "type": "pairing.PairingMessage",
+  "hex": "10080210c801a201080a04080310061801",
+  "expected": {
+   "protocolVersion": 2,
+   "status": "STATUS_OK",
+   "pairingOption": {
+    "inputEncodings": [
+     {
+      "type": "ENCODING_TYPE_HEXADECIMAL",
+      "symbolLength": 6
+     }
+    ],
+    "preferredRole": "ROLE_TYPE_INPUT"
+   }
+  }
+ },
+ {
+  "name": "pairing_configuration",
+  "type": "pairing.PairingMessage",
+  "hex": "10080210c801f201080a04080310061001",
+  "expected": {
+   "protocolVersion": 2,
+   "status": "STATUS_OK",
+   "pairingConfiguration": {
+    "encoding": {
+     "type": "ENCODING_TYPE_HEXADECIMAL",
+     "symbolLength": 6
+    },
+    "clientRole": "ROLE_TYPE_INPUT"
+   }
+  }
+ },
+ {
+  "name": "pairing_secret",
+  "type": "pairing.PairingMessage",
+  "hex": "2a080210c801c202220a20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "expected": {
+   "protocolVersion": 2,
+   "status": "STATUS_OK",
+   "pairingSecret": {
+    "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+   }
+  }
+ },
+ {
+  "name": "remote_configure",
+  "type": "remote.RemoteMessage",
+  "hex": "340a3208ee04122d0a0a57696e646f77732050431207436f6e746f736f18012201312a0a6774762d72656d6f74653205312e302e30",
+  "expected": {
+   "remoteConfigure": {
+    "code1": 622,
+    "deviceInfo": {
+     "model": "Windows PC",
+     "vendor": "Contoso",
+     "unknown1": 1,
+     "unknown2": "1",
+     "packageName": "gtv-remote",
+     "appVersion": "1.0.0"
+    }
+   }
+  }
+ },
+ {
+  "name": "remote_set_active",
+  "type": "remote.RemoteMessage",
+  "hex": "05120308ee04",
+  "expected": {
+   "remoteSetActive": {
+    "active": 622
+   }
+  }
+ },
+ {
+  "name": "remote_ping_response",
+  "type": "remote.RemoteMessage",
+  "hex": "054a0308b960",
+  "expected": {
+   "remotePingResponse": {
+    "val1": 12345
+   }
+  }
+ },
+ {
+  "name": "key_dpad_up",
+  "type": "remote.RemoteMessage",
+  "hex": "06520408131003",
+  "expected": {
+   "remoteKeyInject": {
+    "keyCode": "KEYCODE_DPAD_UP",
+    "direction": "SHORT"
+   }
+  }
+ },
+ {
+  "name": "key_power_long",
+  "type": "remote.RemoteMessage",
+  "hex": "065204081a1001",
+  "expected": {
+   "remoteKeyInject": {
+    "keyCode": "KEYCODE_POWER",
+    "direction": "START_LONG"
+   }
+  }
+ },
+ {
+  "name": "app_link",
+  "type": "remote.RemoteMessage",
+  "hex": "1cd205190a1768747470733a2f2f7777772e796f75747562652e636f6d",
+  "expected": {
+   "remoteAppLinkLaunchRequest": {
+    "appLink": "https://www.youtube.com"
+   }
+  }
+ },
+ {
+  "name": "ime_batch_edit",
+  "type": "remote.RemoteMessage",
+  "hex": "1eaa011b080310071a1508011211080a100a1a0b68656c6c6f20776f726c64",
+  "expected": {
+   "remoteImeBatchEdit": {
+    "imeCounter": 3,
+    "fieldCounter": 7,
+    "editInfo": [
+     {
+      "insert": 1,
+      "textFieldStatus": {
+       "start": 10,
+       "end": 10,
+       "value": "hello world"
+      }
+     }
+    ]
+   }
+  }
+ }
+]

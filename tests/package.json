@@ -1,0 +1,14 @@
+{
+  "name": "gtvremote-encoding-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-checks the Python protobuf encoder against protobufjs and the real .proto files",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node verify_encoding.js",
+    "fixtures": "node make_fixtures.js"
+  },
+  "dependencies": {
+    "protobufjs": "^8.8.0"
+  }
+}
