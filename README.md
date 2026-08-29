@@ -11,6 +11,28 @@ on and pair once.
   <img src="docs/screenshot.png" width="300" alt="The remote window">
 </p>
 
+## Features
+
+* **Keyboard first.** Drive the TV from your keyboard: arrows and Enter for
+  the D-pad, Backspace for Back, Space for play/pause, `+`/`-`/`M` for volume.
+  Put the cursor in any text box on the TV and *just type* - every keystroke
+  lands on the TV, Backspace deletes, Enter submits. This is the best way to
+  use it; see [Keyboard control](#keyboard-control).
+* **The whole remote**: power, D-pad, Back / Home / Menu, volume and mute,
+  media keys with auto-repeat, and an **Input** menu that switches HDMI / AV /
+  tuner directly on TCL sets (key codes for other makers, or your own input
+  ids).
+* **One-tap app icons** for YouTube, Netflix, Prime Video, Disney+ and
+  Spotify - replace them with any app you like.
+* **Live status from the TV**: volume, power state, foreground app, and
+  whether a text box is waiting for input.
+* **Zero setup on the TV**: find it with a network scan, pair once with the
+  on-screen code, and the app auto-connects and auto-reconnects from then on.
+* **One file**: a standalone `.exe` with no runtime to install; from source
+  it needs only Python and `cryptography` - the protocol (TLS, protobuf,
+  mDNS) is implemented on the standard library.
+* Resizable, HiDPI-aware interface; works with multiple TVs.
+
 ## Install
 
 **Standalone .exe (no Python needed):** download `GoogleTVRemote.exe` from
@@ -40,24 +62,48 @@ Pairing is remembered: the app keeps a client certificate in
 `%APPDATA%\GoogleTVRemote\`, and the TV recognises it from then on. Use
 **Re-pair** (bottom right) if the TV ever forgets this remote.
 
+## Keyboard control
+
+The remote is at its best from the keyboard: keep the window focused and
+you never need the mouse.
+
+| Key | Action on the TV |
+|---|---|
+| `←` `↑` `→` `↓` | D-pad |
+| `Enter` | OK (select) |
+| `Backspace` or `Esc` | Back |
+| `Home` | Home screen |
+| `Space` | Play / Pause |
+| `+` / `-` | Volume up / down |
+| `M` | Mute |
+| `Ctrl` `+` / `Ctrl` `-` / `Ctrl` `0` | Resize the interface / reset |
+
+**Typing on the TV.** Whenever the TV has a text box focused (a search box,
+a login form...), the status bar says *TV text box active - just type*:
+
+| Key | Action |
+|---|---|
+| any character | typed into the TV's text box, live |
+| `Backspace` | deletes the last character |
+| `Enter` | submits (e.g. runs the search) |
+| arrows | still move the D-pad, so you can pick a suggestion |
+
+Shortcuts apply while the window is focused and the cursor is not inside
+one of the app's own boxes (the IP box or the text box); pressing Connect
+or clicking the window background moves focus out of them.
+
 ## Controls
+
+The on-screen buttons cover everything the keyboard does, plus:
 
 | | |
 |---|---|
-| D-pad + OK | Arrow keys, Enter |
-| Back | Backspace or Esc |
-| Home | Home |
-| Play / Pause | Space |
-| Volume | `+` / `-`, mute with `M` |
 | Input | Opens a menu of the TV's inputs. On TCL sets these switch directly (HDMI 1-4, AV, tuner); other makers get the input-picker / HDMI key codes, which only some TVs honour. See *Settings* to add your own |
-| Type text | Put the cursor in a text box on the TV (a search box, say) and just type: keystrokes go to the TV, Backspace deletes, Enter submits. The text box in the app does the same in one go (Enter or ➤), ⌫ deletes the last character on the TV and ✕ clears the field |
+| Text box + ➤ | Sends a whole line to the TV's text box in one go; ⌫ deletes the last character on the TV and ✕ clears the field |
 | Apps | One-tap icons for YouTube, Netflix, Prime Video, Disney+ and Spotify (hover for the name) |
-| Resize the interface | `Ctrl` `+` / `Ctrl` `-`, `Ctrl` `0` to reset |
 
 Arrow and volume buttons auto-repeat when held. The status bar shows the
-live volume, power state and foreground app, all pushed by the TV, and
-says when a TV text box is active. Keyboard shortcuts work whenever the
-window is focused and the cursor is not in one of its own text boxes.
+live volume, power state and foreground app, all pushed by the TV.
 
 ### Settings
 
