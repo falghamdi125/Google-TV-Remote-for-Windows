@@ -49,8 +49,8 @@ Pairing is remembered: the app keeps a client certificate in
 | Home | Home |
 | Play / Pause | Space |
 | Volume | `+` / `-`, mute with `M` |
-| Input | Opens a menu: the TV's input picker, HDMI 1-4 or Live TV. Which of these a TV honours depends on its maker (Chromecast dongles have no inputs at all) |
-| Type text | Type in the box and press Enter. Delivered through the TV's on-screen keyboard, so first select a text field on the TV (a search box, say) |
+| Input | Opens a menu of the TV's inputs. On TCL sets these switch directly (HDMI 1-4, AV, tuner); other makers get the input-picker / HDMI key codes, which only some TVs honour. See *Settings* to add your own |
+| Type text | Type in the box and press Enter (or ➤). Delivered through the TV's input method into whatever text field the TV has focused, so select a search box on the TV first. ⌫ deletes the last character on the TV, ✕ clears the field; OK / Enter then submits the search |
 | Apps | One-tap icons for YouTube, Netflix, Prime Video, Disney+ and Spotify (hover for the name) |
 | Resize the interface | `Ctrl` `+` / `Ctrl` `-`, `Ctrl` `0` to reset |
 
@@ -73,6 +73,22 @@ A link without a scheme is treated as a package name and opened through
 `market://launch?id=...`, which launches exactly that app. Plain `https://`
 links tend to make Android show an "Open with" chooser instead. Apps the
 remote knows get their icon; any other app shows a tile with its initial.
+
+The Input menu can be replaced the same way:
+
+```json
+"inputs": [
+  {"name": "HDMI 1", "link": "com.tcl.tvinput/.passthroughinput.TvPassThroughService/HW1413744128"},
+  {"name": "Input picker", "key": "KEYCODE_TV_INPUT"}
+]
+```
+
+A `link` is a TV-input id (or a full `content://android.media.tv/passthrough/...`
+URI); viewing it makes the TV app tune to that input, which is how the
+remote switches inputs on TCL sets. Ids are vendor specific - with ADB
+enabled, `adb shell dumpsys tv_input` lists them, or watch
+`adb logcat | grep sourceName` while switching inputs with the TV's own
+remote. A `key` entry sends an Android key code instead.
 
 ## Command line
 
@@ -128,6 +144,7 @@ for the generated `keycodes.py`.
 | `gtvremote/remote.py` | control session with auto-reconnect (port 6466) |
 | `gtvremote/discovery.py` | mDNS scan for `_androidtvremote2._tcp` |
 | `gtvremote/config.py` | settings in `%APPDATA%\GoogleTVRemote` |
+| `gtvremote/inputs.py` | input switching: per-vendor passthrough links and key codes |
 | `gtvremote/keycodes.py` | Android key codes, generated from the proto |
 | `gtvremote/ui/` | tkinter interface: `theme.py`, `widgets.py`, `icons.py`, `window.py` |
 | `proto/` | the protocol's `.proto` files, for reference and the tests |
@@ -177,8 +194,9 @@ Power is a toggle on most devices; some only wake over HDMI-CEC.
 the TV has focused. Select the field first (the on-screen keyboard or a
 blinking cursor shows it is active), then press Type.
 
-**Input does nothing** - try the other entries in the Input menu; TV makers
-differ in which key codes they honour, and streaming dongles have no inputs.
+**Input does nothing** - on non-TCL sets the menu sends key codes, which
+many makers ignore (and streaming dongles have no inputs). Add your TV's
+input ids to `settings.json` as described under *Settings*.
 
 ## License
 

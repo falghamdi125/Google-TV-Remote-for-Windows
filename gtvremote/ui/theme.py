@@ -48,9 +48,9 @@ WINDOW_PADX = 12
 WINDOW_PADY = 10
 ROW_GAP = 8               # vertical space between rows of buttons
 COL_GAP = 6               # horizontal space between buttons in a row
-BUTTON_HEIGHT = 40        # remote keys and app icons
-SMALL_BUTTON_HEIGHT = 34  # Scan / Connect / Type / app shortcuts
-PANEL_PAD = 8             # inner padding of the connection bar and d-pad panel
+BUTTON_HEIGHT = 42        # every row: keys, app icons, entries and their buttons
+SMALL_BUTTON_HEIGHT = 34  # dialog buttons
+PANEL_PAD = 6             # inner padding of the connection bar and d-pad panel
 
 UI_FONT = "Segoe UI"
 ICON_FONT = "Segoe UI Symbol"

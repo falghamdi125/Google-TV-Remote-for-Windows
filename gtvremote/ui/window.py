@@ -11,7 +11,7 @@ from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog
 
-from .. import config, discovery, keycodes
+from .. import config, discovery, inputs, keycodes
 from ..pairing import PairingError, PairingSession
 from ..remote import RemoteClient
 from . import theme
@@ -26,17 +26,6 @@ EVENT_POLL_MS = 50
 AUTO_CONNECT_DELAY_MS = 250
 MAX_APP_LABEL = 44
 MAX_APPS_PER_ROW = 6
-
-# Which input-switching key a TV honours depends on its maker (Chromecast
-# dongles have no inputs at all), so the Input button offers all of them.
-INPUT_SOURCES = [
-    ("Input picker", keycodes.KEYCODE_TV_INPUT),
-    ("HDMI 1", keycodes.KEYCODE_TV_INPUT_HDMI_1),
-    ("HDMI 2", keycodes.KEYCODE_TV_INPUT_HDMI_2),
-    ("HDMI 3", keycodes.KEYCODE_TV_INPUT_HDMI_3),
-    ("HDMI 4", keycodes.KEYCODE_TV_INPUT_HDMI_4),
-    ("Live TV", keycodes.KEYCODE_TV),
-]
 
 
 def icon_path() -> Path | None:
@@ -185,11 +174,14 @@ class RemoteApp:
         row.pack(fill="x", pady=(px(gap), 0))
         return row
 
-    def _entry(self, parent, variable: tk.StringVar) -> tk.Entry:
-        return tk.Entry(parent, textvariable=variable, bg=BTN, fg=TEXT,
-                        insertbackground=TEXT, relief="flat", font=theme.FONT,
-                        highlightthickness=1, highlightbackground=BTN,
-                        highlightcolor=ACCENT)
+    def _entry(self, parent, variable: tk.StringVar) -> tuple[tk.Entry, int]:
+        """A text box plus the ``ipady`` that makes it as tall as the buttons."""
+        entry = tk.Entry(parent, textvariable=variable, bg=BTN, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", font=theme.FONT,
+                         highlightthickness=1, highlightbackground=BTN,
+                         highlightcolor=ACCENT)
+        ipady = max(0, (px(theme.BUTTON_HEIGHT) - entry.winfo_reqheight()) // 2)
+        return entry, ipady
 
     def _key_button(self, parent, text, key_code, **kwargs) -> RoundButton:
         """A remote button that injects ``key_code`` and flashes on send."""
@@ -206,22 +198,23 @@ class RemoteApp:
         inner.pack(fill="x", padx=px(theme.PANEL_PAD), pady=px(theme.PANEL_PAD))
 
         self.host_var = tk.StringVar()
-        self.host_entry = self._entry(inner, self.host_var)
+        self.host_entry, ipady = self._entry(inner, self.host_var)
         self.host_entry.configure(width=12)
-        self.host_entry.pack(side="left", fill="x", expand=True, ipady=px(5),
+        self.host_entry.pack(side="left", fill="x", expand=True, ipady=ipady,
                              padx=(0, px(theme.COL_GAP)))
         self.host_entry.bind("<Return>", lambda _e: self.toggle_connection())
 
+        # fill="y" keeps the buttons exactly as tall as the box beside them.
         self.scan_btn = RoundButton(inner, text="Scan", command=self.scan_devices,
-                                    width=54, height=theme.SMALL_BUTTON_HEIGHT, radius=8,
+                                    width=54, height=theme.BUTTON_HEIGHT, radius=8,
                                     font=theme.FONT_SMALL,
                                     tooltip="Find Google TV devices on your network")
-        self.scan_btn.pack(side="left", padx=(0, px(theme.COL_GAP)))
+        self.scan_btn.pack(side="left", fill="y", padx=(0, px(theme.COL_GAP)))
 
         self.connect_btn = RoundButton(inner, text="Connect", command=self.toggle_connection,
-                                       width=76, height=theme.SMALL_BUTTON_HEIGHT, radius=8,
+                                       width=76, height=theme.BUTTON_HEIGHT, radius=8,
                                        font=theme.FONT_SMALL, fill=ACCENT, hover=ACCENT_HOVER)
-        self.connect_btn.pack(side="left")
+        self.connect_btn.pack(side="left", fill="y")
 
     def _build_status(self, parent) -> None:
         row = self._section(parent)
@@ -299,15 +292,23 @@ class RemoteApp:
     def _build_text_row(self, parent) -> None:
         row = self._section(parent)
         self.text_var = tk.StringVar()
-        self.text_entry = self._entry(row, self.text_var)
-        self.text_entry.pack(side="left", fill="x", expand=True, ipady=px(5),
+        self.text_entry, ipady = self._entry(row, self.text_var)
+        self.text_entry.configure(width=10)              # it stretches; keep the minimum small
+        self.text_entry.pack(side="left", fill="x", expand=True, ipady=ipady,
                              padx=(0, px(theme.COL_GAP)))
         self.text_entry.bind("<Return>", lambda _e: self.send_text())
-        send = RoundButton(row, text="Type", command=self.send_text, width=58,
-                           height=theme.SMALL_BUTTON_HEIGHT, radius=8, font=theme.FONT_SMALL,
-                           tooltip="Type this text into the field focused on the TV")
-        send.pack(side="left")
-        self._buttons.append(send)
+        tools = [
+            ("⌫", self.backspace, "Delete the last character on the TV"),
+            ("✕", self.clear_text, "Clear the text field on the TV"),
+            ("➤", self.send_text, "Type this text on the TV  (Enter)"),
+        ]
+        for index, (glyph, command, tip) in enumerate(tools):
+            last = index == len(tools) - 1
+            button = RoundButton(row, text=glyph, command=command, width=40,
+                                 height=theme.BUTTON_HEIGHT, radius=8,
+                                 font=theme.FONT_ICON, tooltip=tip)
+            button.pack(side="left", fill="y", padx=(0, 0 if last else px(theme.COL_GAP)))
+            self._buttons.append(button)
 
     def _build_apps(self, parent) -> None:
         section = self._section(parent, gap=theme.ROW_GAP + 4)
@@ -486,20 +487,35 @@ class RemoteApp:
         self.send_key(keycodes.KEYCODE_POWER, self.power_btn)
 
     def _show_input_menu(self) -> None:
-        """Offer every input-switching key; which one works depends on the TV."""
+        """Offer the inputs this TV can switch to (see gtvremote.inputs)."""
         if not self._is_connected():
             self._set_status("error", "Not connected.")
             return
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL, fg=TEXT, activebackground=ACCENT,
                        activeforeground=TEXT, bd=0, relief="flat", font=theme.FONT_SMALL)
-        for label, code in INPUT_SOURCES:
-            menu.add_command(label=label,
-                             command=lambda c=code: self.send_key(c, self.input_btn))
+        for label, (kind, target) in inputs.input_sources(self.client.tv_vendor, self.settings):
+            if kind == "key":
+                command = lambda c=target: self.send_key(c, self.input_btn)
+            else:
+                command = lambda l=target, n=label: self.switch_input(l, n)
+            menu.add_command(label=label, command=command)
         button = self.input_btn
         try:
             menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
         finally:
             menu.grab_release()
+
+    def switch_input(self, link: str, name: str) -> None:
+        if not self._is_connected():
+            self._set_status("error", "Not connected.")
+            return
+        try:
+            self.client.launch_app(link)
+        except OSError as exc:
+            self._set_status("error", f"Could not switch to {name}: {exc}")
+            return
+        self.input_btn.flash()
+        self._set_status("connected", f"Switching to {name}...")
 
     def launch_app(self, link: str, name: str) -> None:
         if not self._is_connected():
@@ -523,6 +539,26 @@ class RemoteApp:
             return
         self._set_status("connected", "Text sent to the TV")
         self.text_var.set("")
+
+    def backspace(self) -> None:
+        self._edit_tv_text("delete_text", "Deleted the last character")
+
+    def clear_text(self) -> None:
+        self._edit_tv_text("clear_text", "Cleared the text field")
+
+    def _edit_tv_text(self, method: str, done: str) -> None:
+        if not self._is_connected():
+            self._set_status("error", "Not connected.")
+            return
+        try:
+            getattr(self.client, method)()
+        except ValueError as exc:                       # no field focused / nothing to delete
+            self._set_status("error", str(exc))
+            return
+        except OSError as exc:
+            self._set_status("error", f"Edit failed: {exc}")
+            return
+        self._set_status("connected", done)
 
     def scan_devices(self) -> None:
         self._set_status("connecting", "Scanning the network...")

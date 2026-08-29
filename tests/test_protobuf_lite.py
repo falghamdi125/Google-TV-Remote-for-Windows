@@ -121,14 +121,15 @@ class DelimitedReaderTest(unittest.TestCase):
 class ParseRemoteTest(unittest.TestCase):
     def test_fixtures_from_protobufjs(self):
         expected = {
-            "configure": {"kind": "configure"},
+            "configure": {"kind": "configure", "model": "Chromecast", "vendor": "Google"},
             "set_active": {"kind": "set_active"},
             "ping": {"kind": "ping", "val1": 42},
             "start_on": {"kind": "start", "started": True},
             "volume": {"kind": "volume", "player_model": "Living Room TV",
                        "volume_max": 100, "volume_level": 37, "volume_muted": False},
             "current_app": {"kind": "current_app",
-                            "app_package": "com.google.android.youtube.tv"},
+                            "app_package": "com.google.android.youtube.tv",
+                            "field_counter": 1, "field_value": "", "field_label": "Search"},
             "ime_batch_edit": {"kind": "ime_batch_edit", "ime_counter": 3, "field_counter": 7},
             "ime_show_request": {"kind": "ime_show_request", "counter_field": 7,
                                  "value": "", "label": "Search"},

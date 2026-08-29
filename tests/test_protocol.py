@@ -361,6 +361,7 @@ class MockTVTest(unittest.TestCase):
         self.assertEqual(server.configure_code, messages.CONFIGURE_CODE)
         self.assertEqual(server.set_active, messages.CONFIGURE_CODE)
         self.assertEqual(server.ping_reply, 42)
+        self.assertEqual((client.tv_vendor, client.tv_model), ("Google", "Chromecast"))
 
         self.assertTrue(wait_for(lambda: volumes and powers and apps))
         self.assertEqual(volumes[-1], (37, 100, False))
@@ -373,6 +374,7 @@ class MockTVTest(unittest.TestCase):
 
         # The TV announced a focused text field; typing must echo its counters.
         self.assertTrue(wait_for(lambda: (client._ime_counter, client._field_counter) == (3, 7)))
+        self.assertEqual(client.text_field, "Search")
 
         client.send_key(keycodes.KEYCODE_DPAD_UP)
         client.send_key(keycodes.KEYCODE_DPAD_CENTER)

@@ -103,10 +103,24 @@ class WindowTest(unittest.TestCase):
         self.app.launch_app("netflix://", "Netflix")
         self.app.text_var.set("hello")
         self.app.send_text()
+        self.app.backspace()
+        self.app.clear_text()
         self.app._show_input_menu()
         self.root.update()
         self.assertEqual(self.app.status_var.get(), "Not connected.")
         self.assertEqual(self.app.text_var.get(), "hello", "text kept for a retry")
+
+    def test_backspace_and_clear_edit_the_tv_field(self):
+        client = mock.Mock(is_connected=True)
+        self.app.client = client
+        self.app.backspace()
+        client.delete_text.assert_called_once_with()
+        self.app.clear_text()
+        client.clear_text.assert_called_once_with()
+        self.assertEqual(self.app.status_var.get(), "Cleared the text field")
+        client.delete_text.side_effect = ValueError("No text field is focused on the TV.")
+        self.app.backspace()
+        self.assertEqual(self.app.status_var.get(), "No text field is focused on the TV.")
 
     def test_typing_goes_to_the_client(self):
         client = mock.Mock(is_connected=True)
@@ -116,6 +130,13 @@ class WindowTest(unittest.TestCase):
         client.send_text.assert_called_once_with("hello")
         self.assertEqual(self.app.text_var.get(), "")
         self.assertEqual(self.app.status_var.get(), "Text sent to the TV")
+
+    def test_input_switch_launches_the_passthrough_link(self):
+        client = mock.Mock(is_connected=True, tv_vendor="TCL")
+        self.app.client = client
+        self.app.switch_input("content://android.media.tv/passthrough/x", "HDMI 2")
+        client.launch_app.assert_called_once_with("content://android.media.tv/passthrough/x")
+        self.assertEqual(self.app.status_var.get(), "Switching to HDMI 2...")
 
     def test_rows_line_up(self):
         self.root.deiconify()

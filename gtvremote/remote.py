@@ -73,6 +73,8 @@ class RemoteClient:
         self._stop = threading.Event()
         self._connected = threading.Event()
 
+        self.tv_model = ""                      # from RemoteConfigure, e.g. "Smart TV Pro"
+        self.tv_vendor = ""                     # e.g. "TCL"
         self.volume_level = 0
         self.volume_max = 0
         self.volume_muted = False
@@ -81,6 +83,7 @@ class RemoteClient:
         # The TV's text-field counters, echoed back when typing (see send_text).
         self._ime_counter = 0
         self._field_counter = 0
+        self.text_field: str | None = None      # label of the focused field, if any
 
     # -- lifecycle --------------------------------------------------------
 
@@ -201,6 +204,8 @@ class RemoteClient:
     def _handle(self, msg: dict) -> None:
         kind = msg.get("kind")
         if kind == "configure":
+            self.tv_model = msg.get("model", "")
+            self.tv_vendor = msg.get("vendor", "")
             self._send_raw(messages.remote_configure(
                 self.model, self.vendor, self.package_name, self.app_version))
         elif kind == "set_active":
@@ -222,9 +227,20 @@ class RemoteClient:
             if package and package != self.current_app:
                 self.current_app = package
                 self.on_app(package)
+            if "field_counter" in msg:
+                self.text_field = msg.get("field_label", "")
+                self._note_field_counter(msg["field_counter"])
+        elif kind == "ime_show_request":
+            self._note_field_counter(msg.get("counter_field", 0))
         elif kind == "ime_batch_edit":
             self._ime_counter = msg.get("ime_counter", 0)
-            self._field_counter = msg.get("field_counter", 0)
+            self._note_field_counter(msg.get("field_counter", 0))
+
+    def _note_field_counter(self, counter: int) -> None:
+        # The TV reports 0 in its RemoteImeBatchEdit while the field status
+        # carries the real, ever-increasing counter; keep the latest real one.
+        if counter:
+            self._field_counter = counter
 
     # -- sending ----------------------------------------------------------
 
@@ -250,14 +266,23 @@ class RemoteClient:
         self._send_raw(messages.remote_app_link_launch(app_link))
 
     def send_text(self, text: str) -> None:
-        """Put ``text`` into the text field currently focused on the TV.
+        """Type ``text`` into the text field currently focused on the TV.
 
         Goes through the TV's input method, as the official app does, rather
         than through key presses (which the on-screen keyboard swallows), so
-        any Unicode text works. The TV must have a text field focused, e.g.
-        a search box; otherwise nothing happens.
+        any Unicode text works. The text is appended to what the field
+        already holds. The TV must have a text field focused, e.g. a search
+        box; otherwise nothing happens.
         """
         if not text:
             raise ValueError("text is empty")
         self._send_raw(messages.remote_ime_batch_edit(
             self._ime_counter, self._field_counter, text))
+
+    def delete_text(self) -> None:
+        """Delete the last character of the focused field (not yet supported)."""
+        raise ValueError("Deleting text on the TV is not supported yet.")
+
+    def clear_text(self) -> None:
+        """Clear the focused field (not yet supported)."""
+        raise ValueError("Clearing the TV's text field is not supported yet.")

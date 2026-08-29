@@ -117,7 +117,6 @@ CONFIGURE_CODE = 622
 
 # Messages that carry no payload we use; parse_remote reports just the kind.
 _SIMPLE_KINDS = {
-    RM_CONFIGURE: "configure",
     RM_SET_ACTIVE: "set_active",
     RM_VOICE_BEGIN: "voice_begin",
     RM_VOICE_END: "voice_end",
@@ -159,10 +158,13 @@ def remote_app_link_launch(app_link: str) -> bytes:
 
 
 def remote_ime_batch_edit(ime_counter: int, field_counter: int, text: str) -> bytes:
-    """Replace the focused text field's contents with ``text``.
+    """Append ``text`` to the text field focused on the TV.
 
-    Mirrors the official client: the counters are the ones the TV last sent
-    in its own RemoteImeBatchEdit, and the caret goes to the end of the text.
+    ``ime_counter`` must be the one the TV sent in its own RemoteImeBatchEdit
+    (a mismatch is silently dropped). ``field_counter`` is the focused
+    field's ``counter_field``, which the TV bumps after every edit and
+    reports in RemoteImeKeyInject / RemoteImeShowRequest. Verified against a
+    TCL Google TV; the caret placement follows the official client.
     """
     caret = max(len(text) - 1, 0)
     ime_object = Writer().varint(1, caret).varint(2, caret).string(3, text)
@@ -181,6 +183,10 @@ def parse_remote(raw: bytes) -> dict:
     if has(msg, RM_PING_REQUEST):
         ping = get_message(msg, RM_PING_REQUEST) or {}
         return {"kind": "ping", "val1": get_varint(ping, 1)}
+    if has(msg, RM_CONFIGURE):
+        configure = get_message(msg, RM_CONFIGURE) or {}
+        info = get_message(configure, 2) or {}
+        return {"kind": "configure", "model": get_string(info, 1), "vendor": get_string(info, 2)}
     if has(msg, RM_START):
         start = get_message(msg, RM_START) or {}
         return {"kind": "start", "started": bool(get_varint(start, 1))}
@@ -196,7 +202,13 @@ def parse_remote(raw: bytes) -> dict:
     if has(msg, RM_IME_KEY_INJECT):
         ime = get_message(msg, RM_IME_KEY_INJECT) or {}
         app_info = get_message(ime, 1) or {}
-        return {"kind": "current_app", "app_package": get_string(app_info, 12)}
+        out = {"kind": "current_app", "app_package": get_string(app_info, 12)}
+        field = get_message(ime, 2)
+        if field is not None:                       # a text field is focused
+            out["field_counter"] = get_varint(field, 1)
+            out["field_value"] = get_string(field, 2)
+            out["field_label"] = get_string(field, 6)
+        return out
     if has(msg, RM_IME_BATCH_EDIT):
         edit = get_message(msg, RM_IME_BATCH_EDIT) or {}
         return {"kind": "ime_batch_edit",

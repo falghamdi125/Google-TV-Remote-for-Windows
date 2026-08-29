@@ -24,6 +24,7 @@ DEFAULTS: dict = {
     "ui_scale": 1.5,
     "auto_connect": True,
     "apps": [],              # [{"name": ..., "link": ...}]; empty = DEFAULT_APPS
+    "inputs": [],            # [{"name": ..., "link" | "key": ...}]; empty = per-vendor list
 }
 
 # Plain https:// links are handled by more than one app, so Android shows an
