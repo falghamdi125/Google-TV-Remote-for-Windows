@@ -4,7 +4,7 @@ Speaks the Android TV Remote Service v2 protocol (TLS ports 6467 pairing /
 6466 control) with no third-party protocol dependencies.
 """
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 import logging  # noqa: E402
 
