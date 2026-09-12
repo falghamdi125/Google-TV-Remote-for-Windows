@@ -3,15 +3,17 @@ moves worker-thread callbacks onto the Tk thread."""
 
 from __future__ import annotations
 
+import logging
 import queue
 import sys
 import threading
 import tkinter as tk
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog
 
-from .. import config, discovery, inputs, keycodes
+from .. import __version__, config, discovery, inputs, keycodes
 from ..pairing import PairingError, PairingSession
 from ..remote import RemoteClient
 from . import theme
@@ -24,6 +26,7 @@ APP_TITLE = "Google TV Remote"
 ICON_FILE = "app.ico"
 EVENT_POLL_MS = 50
 AUTO_CONNECT_DELAY_MS = 250
+LOG_MAX_BYTES = 256_000                 # the connection log rotates once at this size
 MAX_APP_LABEL = 44
 MAX_APPS_PER_ROW = 6
 
@@ -811,8 +814,24 @@ class DevicePicker(tk.Toplevel):
         self._on_choose(device)
 
 
+def log_to_file() -> None:
+    """Keep a small connection log next to the settings, so a dropped link
+    can be explained after the fact (see README, Troubleshooting)."""
+    try:
+        handler = RotatingFileHandler(config.log_path(), maxBytes=LOG_MAX_BYTES,
+                                      backupCount=1, encoding="utf-8")
+    except OSError:
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger = logging.getLogger("gtvremote")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.info("%s %s starting", APP_TITLE, __version__)
+
+
 def main() -> None:
     """Open the remote window and run until it is closed."""
+    log_to_file()
     if sys.platform == "win32":
         # Must run before the first Tk window exists. Set afterwards, Windows
         # has already sized the window and then scales it, shrinking the UI.

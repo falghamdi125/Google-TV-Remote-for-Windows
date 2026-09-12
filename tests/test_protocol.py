@@ -31,9 +31,9 @@ from cryptography.x509.oid import NameOID
 
 from gtvremote import certs, keycodes, messages
 from gtvremote.pairing import BadCodeError, PairingSession
-from gtvremote.protobuf_lite import (DelimitedReader, Writer, decode, get_bytes,
-                                     get_message, get_string, get_varint)
-from gtvremote.remote import RemoteClient
+from gtvremote.protobuf_lite import (DelimitedReader, Writer, decode, encode_varint,
+                                     get_bytes, get_message, get_string, get_varint)
+from gtvremote.remote import UNPAIRED_AFTER_REFUSALS, RemoteClient
 
 FIXTURES = json.loads((Path(__file__).parent / "fixtures.json").read_text())
 LOCALHOST = "127.0.0.1"
@@ -191,13 +191,16 @@ class MockRemoteServer(MockServer):
     """The TV half of the remote-control session."""
 
     def __init__(self, context: ssl.SSLContext, connections: int = 1,
-                 drop_first: bool = False, echo_edits: bool = True) -> None:
+                 drops: int = 0, echo_edits: bool = True,
+                 after_handshake: tuple[bytes, ...] = ()) -> None:
         super().__init__(context, connections)
-        self.drop_first = drop_first
+        self.drops = drops                      # sessions the TV ends right after the handshake
         self.echo_edits = echo_edits
+        self.after_handshake = after_handshake  # extra TV messages sent once the session is up
         self.configure_code = None
         self.set_active = None
         self.ping_reply = None
+        self.pongs = 0                          # replies to pings sent after the handshake
         self.keys: list[tuple[int, int]] = []
         self.app_links: list[str] = []
         self.texts: list[dict] = []
@@ -232,14 +235,18 @@ class MockRemoteServer(MockServer):
 
         for name in ("start_on", "volume", "current_app", "ime_batch_edit"):
             conn.sendall(bytes.fromhex(FIXTURES[name]))
+        for raw in self.after_handshake:
+            conn.sendall(raw)
         self.handshake_done.set()
 
-        if self.drop_first and self.served == 1:
+        if self.served <= self.drops:
             return                                      # the TV goes away
 
         conn.settimeout(10.0)
         while True:
             msg = recv_one(conn, reader)
+            if get_message(msg, messages.RM_PING_RESPONSE) is not None:
+                self.pongs += 1
             key = get_message(msg, messages.RM_KEY_INJECT)
             if key is not None:
                 self.keys.append((get_varint(key, 1), get_varint(key, 2)))
@@ -437,7 +444,7 @@ class MockTVTest(unittest.TestCase):
         self.assertEqual(client.text_value, "", "unconfirmed edit does not change the model")
 
     def test_reconnects_when_the_tv_drops_the_link(self):
-        server = MockRemoteServer(self.tv_context(), connections=2, drop_first=True)
+        server = MockRemoteServer(self.tv_context(), connections=2, drops=1)
         server.start()
         states: list[str] = []
         client = self.remote_client(server, on_state=lambda status, _d: states.append(status))
@@ -446,6 +453,88 @@ class MockTVTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: states.count("connected") == 2, timeout=15), states)
         self.assertEqual(server.served, 2)
         self.assertIn("reconnecting", states)
+        self.assertTrue(client.is_connected)
+
+    def test_a_dropped_session_is_retried_at_once_every_time(self):
+        # Two sessions in a row end with the TV going away. Each retry comes
+        # after the short delay - the backoff is for failing to connect, and
+        # must not carry over from one drop to the next.
+        server = MockRemoteServer(self.tv_context(), connections=3, drops=2)
+        server.start()
+        states: list[tuple[str, str]] = []
+        fields: list = []
+        client = self.remote_client(
+            server, on_state=lambda status, detail: states.append((status, detail)),
+            on_field=fields.append)
+
+        client.start()
+        self.assertTrue(wait_for(lambda: sum(s == "connected" for s, _ in states) == 3,
+                                 timeout=15), states)
+        retries = [detail for status, detail in states if status == "reconnecting"]
+        self.assertEqual(len(retries), 2, states)
+        for detail in retries:
+            self.assertIn("Reconnecting in 0.5s", detail)
+            self.assertIn("The TV closed the connection.", detail)
+        # A new session starts from scratch: the field the TV announced
+        # before the drop is forgotten until it is announced again.
+        self.assertTrue(wait_for(lambda: len(fields) == 5), fields)
+        self.assertEqual(fields, ["Search", None, "Search", None, "Search"])
+
+    def test_a_known_tv_refusing_once_is_not_unpaired(self):
+        # The TV accepted us, then drops the next attempt before saying
+        # anything (its remote service restarting looks like this): retry,
+        # rather than reporting the pairing lost.
+        class Flaky(MockRemoteServer):
+            def serve(self, conn):
+                if self.served == 2:
+                    return                              # gone before the first message
+                super().serve(conn)
+
+        server = Flaky(self.tv_context(), connections=3, drops=1)
+        server.start()
+        states: list[str] = []
+        client = self.remote_client(server, on_state=lambda status, _d: states.append(status))
+
+        client.start()
+        self.assertTrue(wait_for(lambda: states.count("connected") == 2, timeout=15), states)
+        self.assertNotIn("unpaired", states)
+        self.assertEqual(server.served, 3)
+
+    def test_a_known_tv_refusing_repeatedly_is_reported_unpaired(self):
+        # The TV accepted us once, then refuses every attempt: the pairing
+        # really is gone, and retrying forever would hide that.
+        class Forgot(MockRemoteServer):
+            def serve(self, conn):
+                if self.served >= 2:
+                    return
+                super().serve(conn)
+
+        server = Forgot(self.tv_context(), connections=1 + UNPAIRED_AFTER_REFUSALS, drops=1)
+        server.start()
+        states: list[str] = []
+        client = self.remote_client(server, on_state=lambda status, _d: states.append(status))
+
+        client.start()
+        self.assertTrue(wait_for(lambda: "unpaired" in states, timeout=20), states)
+        self.assertEqual(states.count("connected"), 1)
+        self.assertEqual(server.served, 1 + UNPAIRED_AFTER_REFUSALS)
+        self.assertFalse(client.is_connected)
+
+    def test_an_undecodable_message_does_not_drop_the_link(self):
+        # A message body with wire type 7 cannot be decoded. The TV then
+        # pings; the link must still be up to answer it.
+        bad = encode_varint(1) + b"\x0f"
+        server = MockRemoteServer(self.tv_context(),
+                                  after_handshake=(bad, bytes.fromhex(FIXTURES["ping"])))
+        server.start()
+        states: list[str] = []
+        client = self.remote_client(server, on_state=lambda status, _d: states.append(status))
+
+        client.start()
+        self.assertTrue(client.wait_until_connected(10), states)
+        self.assertTrue(wait_for(lambda: server.pongs >= 1), "the ping after the bad message")
+        self.assertEqual(server.served, 1)
+        self.assertNotIn("reconnecting", states)
         self.assertTrue(client.is_connected)
 
     def test_unknown_certificate_reports_unpaired_and_stops(self):

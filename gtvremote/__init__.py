@@ -6,6 +6,12 @@ Speaks the Android TV Remote Service v2 protocol (TLS ports 6467 pairing /
 
 __version__ = "1.0.0"
 
+import logging  # noqa: E402
+
+# Library convention: silent unless the application attaches a handler
+# (the window keeps a connection log, see gtvremote.ui.window).
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+
 # Submodules import ``__version__`` from here, so it must be defined first.
 from .discovery import Device, discover  # noqa: E402
 from .pairing import BadCodeError, PairingError, PairingSession  # noqa: E402

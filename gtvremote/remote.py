@@ -6,6 +6,7 @@ power / foreground app, and reconnects on its own when the link drops.
 
 from __future__ import annotations
 
+import logging
 import socket
 import ssl
 import threading
@@ -16,12 +17,22 @@ from typing import Callable
 from . import __version__, certs, keycodes, messages
 from .protobuf_lite import DelimitedReader
 
+log = logging.getLogger(__name__)
+
 REMOTE_PORT = 6466
 
-# The TV pings every ~5s; give it some slack before declaring the link dead.
+# The TV pings every 5s; give it some slack before declaring the link dead.
 SOCKET_TIMEOUT = 15.0
+# A session that was up and then dropped is retried almost at once: TVs and
+# Wi-Fi hops reset idle sessions now and then and accept a new one straight
+# away. Only failures to *get* connected back off.
+QUICK_RETRY = 0.5
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 15.0
+# A TV that has accepted this remote before is not declared unpaired on a
+# single refusal - its remote service restarting looks exactly the same -
+# only after this many in a row.
+UNPAIRED_AFTER_REFUSALS = 3
 # The TV echoes every text edit it accepts within a few ms; silence means
 # it was dropped (no field focused, or stale counters).
 EDIT_ECHO_TIMEOUT = 1.5
@@ -79,6 +90,9 @@ class RemoteClient:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._connected = threading.Event()
+        self._connected_at = 0.0
+        self._ever_connected = False            # this TV has accepted our certificate
+        self._refusals = 0                      # consecutive drops before the TV said anything
 
         self.tv_model = ""                      # from RemoteConfigure, e.g. "Smart TV Pro"
         self.tv_vendor = ""                     # e.g. "TCL"
@@ -139,42 +153,74 @@ class RemoteClient:
     def _run(self) -> None:
         backoff = INITIAL_BACKOFF
         while not self._stop.is_set():
+            was_up = False
             try:
                 self.on_state("connecting", f"Connecting to {self.host}...")
+                log.info("Connecting to %s", self.host)
                 self._connect_once()
-                backoff = INITIAL_BACKOFF
+                break                                   # only stop() ends a session cleanly
             except NotPairedError as exc:
                 if self._stop.is_set():
                     break
-                # Retrying cannot help until the user pairs, so stop here.
-                self.on_state("unpaired", str(exc))
-                return
+                self._refusals += 1
+                if not self._ever_connected or self._refusals >= UNPAIRED_AFTER_REFUSALS:
+                    # Retrying cannot help until the user pairs, so stop here.
+                    log.warning("%s refused the connection %d time(s): treating as unpaired",
+                                self.host, self._refusals)
+                    self.on_state("unpaired", str(exc))
+                    return
+                reason = "The TV refused the connection."
+                log.warning("%s refused the connection (%d of %d before giving up)",
+                            self.host, self._refusals, UNPAIRED_AFTER_REFUSALS)
+                self.on_state("error", reason)
             except Exception as exc:                    # noqa: BLE001 - surfaced to UI
                 if self._stop.is_set():
                     break
-                self.on_state("error", self._describe(exc))
+                was_up = self._connected.is_set()
+                reason = self._describe(exc, was_up)
+                if was_up:
+                    log.warning("Lost the connection to %s after %.0fs: %r",
+                                self.host, time.monotonic() - self._connected_at, exc)
+                else:
+                    log.info("Could not connect to %s: %r", self.host, exc)
+                self.on_state("error", reason)
             finally:
                 self._close_socket()
 
             if self._stop.is_set():
                 break
-            self.on_state("reconnecting", f"Reconnecting in {backoff:.0f}s...")
-            if self._stop.wait(backoff):
+            if was_up:
+                delay, backoff = QUICK_RETRY, INITIAL_BACKOFF
+            else:
+                delay, backoff = backoff, min(backoff * 2, MAX_BACKOFF)
+            self.on_state("reconnecting", f"{reason} Reconnecting in {delay:g}s...")
+            if self._stop.wait(delay):
                 break
-            backoff = min(backoff * 2, MAX_BACKOFF)
 
+        log.info("Disconnected from %s", self.host)
         self.on_state("disconnected", "Disconnected")
 
-    def _describe(self, exc: Exception) -> str:
-        if isinstance(exc, TimeoutError):
-            return "The TV stopped responding."
+    def _describe(self, exc: Exception, was_up: bool) -> str:
         if isinstance(exc, ssl.SSLError):
             return "TLS error: " + (getattr(exc, "reason", None) or str(exc))
+        if not was_up:
+            if isinstance(exc, OSError):
+                return f"Cannot reach {self.host}. Is the TV on and on this network?"
+            return str(exc) or type(exc).__name__
+        if isinstance(exc, TimeoutError):
+            return "The TV stopped responding."
+        if isinstance(exc, ConnectionResetError):
+            return "The TV reset the connection."
+        if isinstance(exc, ConnectionAbortedError):
+            return "The network dropped the connection."
+        if isinstance(exc, ConnectionError):
+            return str(exc) or "The connection was lost."
         if isinstance(exc, OSError):
-            return f"Cannot reach {self.host}. Is the TV on and on this network?"
+            return f"Lost the connection to {self.host}."
         return str(exc) or type(exc).__name__
 
     def _connect_once(self) -> None:
+        self._reset_session()
         # A TV that does not know our certificate refuses the TLS handshake.
         # With TLS 1.3 the refusal only surfaces on the first read, and it
         # may arrive as a TLS alert or as a bare reset/EOF, so any drop before
@@ -204,11 +250,34 @@ class RemoteClient:
                 raise ConnectionError("The TV closed the connection.")
             heard_from_tv = True
             for raw in reader.feed(chunk):
-                self._handle(messages.parse_remote(raw))
+                try:
+                    msg = messages.parse_remote(raw)
+                except (ValueError, IndexError) as exc:
+                    # One message we cannot read is no reason to drop the link.
+                    log.warning("Ignoring an undecodable message from the TV (%s): %s",
+                                exc, raw.hex())
+                    continue
+                self._handle(msg)
+
+    def _reset_session(self) -> None:
+        """Forget what the previous session learned: the TV re-sends its
+        state on connect, and the text-field counters are per session."""
+        self.current_app = ""
+        had_field = self.text_field is not None
+        self.text_field = None
+        self.text_value = ""
+        self._ime_counter = 0
+        self._field_counter = 0
+        if had_field:
+            self.on_field(None)
 
     def _mark_connected(self) -> None:
         if not self._connected.is_set():
+            self._connected_at = time.monotonic()
+            self._ever_connected = True
+            self._refusals = 0
             self._connected.set()
+            log.info("Connected to %s (%s %s)", self.host, self.tv_vendor, self.tv_model)
             self.on_state("connected", f"Connected to {self.host}")
 
     def _handle(self, msg: dict) -> None:

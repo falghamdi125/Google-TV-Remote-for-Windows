@@ -230,6 +230,12 @@ attaches it to a GitHub release.
 Many TVs stop answering in deep standby; enable *Networked standby* /
 *Remote start* in the TV's power settings.
 
+**The connection drops now and then** - TVs and Wi-Fi hops reset an idle
+session from time to time. The app reconnects within half a second (a key
+pressed in that moment is reported as "Not connected"; press it again).
+Every connect and drop, with its cause, is written to
+`%APPDATA%\GoogleTVRemote\remote.log` - look there if the link keeps going.
+
 **"The TV does not recognise this remote"** - the TV forgot the pairing (a
 factory reset, or removal from *Settings → Remotes & Accessories*). Press
 **Re-pair**.

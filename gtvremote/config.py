@@ -14,6 +14,7 @@ from pathlib import Path
 
 APP_DIR_NAME = "GoogleTVRemote"
 SETTINGS_FILE = "settings.json"
+LOG_FILE = "remote.log"
 MAX_REMEMBERED_DEVICES = 10
 
 DEFAULTS: dict = {
@@ -51,6 +52,11 @@ def config_dir() -> Path:
 
 def settings_path() -> Path:
     return config_dir() / SETTINGS_FILE
+
+
+def log_path() -> Path:
+    """The connection log: every connect, drop and its cause."""
+    return config_dir() / LOG_FILE
 
 
 def load() -> dict:
