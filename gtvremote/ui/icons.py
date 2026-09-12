@@ -1,9 +1,10 @@
-"""Small vector app icons drawn straight onto a button's canvas.
+"""App icons for the shortcut buttons.
 
-No bitmap assets: each icon is a brand-coloured tile with a simple glyph,
-so it scales with the UI and needs no image files (and bundles no
-trademarked artwork). Apps without a known icon get a neutral tile showing
-the first letter of their name.
+The bundled apps show their real logos: PNGs in ``gtvremote/assets/icons``,
+rendered by ``tools/render_icons.py`` from the brand glyphs at every size
+the interface can ask for, each in an enabled and a dimmed variant. Any
+other app gets a neutral tile with the first letter of its name, drawn
+straight onto the canvas.
 
 Every drawing function has the signature ``(canvas, cx, cy, size, enabled)``
 and tags what it draws with ``"icon"`` so the button can redraw it.
@@ -12,7 +13,9 @@ and tags what it draws with ``"icon"`` so the button can redraw it.
 from __future__ import annotations
 
 import functools
+import sys
 import tkinter as tk
+from pathlib import Path
 from typing import Callable
 
 from . import theme
@@ -22,11 +25,65 @@ TAG = "icon"
 DIM_TILE = "#33373f"
 DIM_GLYPH = theme.MUTED
 GENERIC_TILE = theme.BTN_ACTIVE
+#: Pixel sizes the PNGs exist in; must match tools/render_icons.py.
+SIZES = tuple(range(20, 69, 4))
 
 IconDrawer = Callable[[tk.Canvas, float, float, int, bool], None]
 
 
-# ------------------------------------------------------------ primitives ---
+# --------------------------------------------------------------- bitmaps ---
+
+def icon_dir() -> Path | None:
+    """The rendered icons, whether running from source, pip-installed or frozen."""
+    candidates = [Path(__file__).resolve().parent.parent / "assets" / "icons"]
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle:
+        candidates.append(Path(bundle) / "gtvremote" / "assets" / "icons")
+    return next((path for path in candidates if path.is_dir()), None)
+
+
+def icon_file(slug: str, size: float, enabled: bool) -> Path | None:
+    """The PNG for ``slug`` nearest to ``size`` pixels, or None if missing."""
+    directory = icon_dir()
+    if directory is None:
+        return None
+    nearest = min(SIZES, key=lambda candidate: abs(candidate - size))
+    path = directory / f"{slug}-{nearest}{'' if enabled else '-dim'}.png"
+    return path if path.exists() else None
+
+
+def bitmap(slug: str, name: str) -> IconDrawer:
+    """A drawer that shows the rendered logo for ``slug``.
+
+    Falls back to the lettered tile when the PNG is not there (a source
+    checkout before the icons were rendered, or a stripped install), so a
+    missing asset can never break the window.
+    """
+    def draw(canvas: tk.Canvas, cx: float, cy: float, size: int, enabled: bool) -> None:
+        path = icon_file(slug, size, enabled)
+        if path is not None:
+            try:
+                image = tk.PhotoImage(master=canvas, file=str(path))
+            except tk.TclError:
+                image = None
+            if image is not None:
+                canvas.create_image(cx, cy, image=image, tags=TAG)
+                canvas._icon_image = image      # Tk holds no reference; keep one
+                return
+        lettered(name, canvas, cx, cy, size, enabled)
+
+    draw.__name__ = slug
+    return draw
+
+
+youtube = bitmap("youtube", "YouTube")
+netflix = bitmap("netflix", "Netflix")
+prime_video = bitmap("primevideo", "Prime Video")
+disney_plus = bitmap("disneyplus", "Disney+")
+spotify = bitmap("spotify", "Spotify")
+
+
+# -------------------------------------------------------------- fallback ---
 
 def _tile(canvas, cx, cy, width, height, fill, radius_ratio=0.24) -> None:
     r = min(width, height) * radius_ratio
@@ -37,65 +94,13 @@ def _tile(canvas, cx, cy, width, height, fill, radius_ratio=0.24) -> None:
                           outline="", tags=TAG)
 
 
-def _play(canvas, cx, cy, height, fill) -> None:
-    """A play triangle, nudged right so it looks centred."""
-    width = height * 0.9
-    cx += width * 0.08
-    canvas.create_polygon(cx - width / 2, cy - height / 2, cx - width / 2, cy + height / 2,
-                          cx + width / 2, cy, fill=fill, outline="", tags=TAG)
-
-
 def _letters(canvas, cx, cy, size, text, fill, ratio=0.5) -> None:
     font = (theme.UI_FONT, max(6, round(size * ratio)), "bold")
     canvas.create_text(cx, cy, text=text, fill=fill, font=font, tags=TAG)
 
 
-def _stroke(size) -> int:
-    return max(1, round(size * 0.075))
-
-
-# ----------------------------------------------------------------- icons ---
-
-def youtube(canvas, cx, cy, size, enabled) -> None:
-    _tile(canvas, cx, cy, size, size * 0.72, "#ff0000" if enabled else DIM_TILE, 0.3)
-    _play(canvas, cx, cy, size * 0.36, "white" if enabled else DIM_GLYPH)
-
-
-def netflix(canvas, cx, cy, size, enabled) -> None:
-    _tile(canvas, cx, cy, size, size, "#141414" if enabled else DIM_TILE)
-    _letters(canvas, cx, cy, size, "N", "#e50914" if enabled else DIM_GLYPH, 0.62)
-
-
-def prime_video(canvas, cx, cy, size, enabled) -> None:
-    glyph = "white" if enabled else DIM_GLYPH
-    _tile(canvas, cx, cy, size, size, "#00a8e1" if enabled else DIM_TILE)
-    _play(canvas, cx, cy - size * 0.1, size * 0.34, glyph)
-    # The "smile" swoosh under the play button.
-    canvas.create_arc(cx - size * 0.3, cy - size * 0.08, cx + size * 0.3, cy + size * 0.4,
-                      start=200, extent=140, style="arc", outline=glyph,
-                      width=_stroke(size), tags=TAG)
-
-
-def disney_plus(canvas, cx, cy, size, enabled) -> None:
-    _tile(canvas, cx, cy, size, size, "#1a3fb8" if enabled else DIM_TILE)
-    _letters(canvas, cx, cy, size, "D+", "white" if enabled else DIM_GLYPH, 0.42)
-
-
-def spotify(canvas, cx, cy, size, enabled) -> None:
-    r = size / 2
-    canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
-                       fill="#1db954" if enabled else DIM_TILE, outline="", tags=TAG)
-    glyph = "#191414" if enabled else DIM_GLYPH
-    for index in range(3):                              # three sound waves
-        half_width = size * (0.33 - 0.06 * index)
-        top = cy - size * 0.32 + index * size * 0.18
-        canvas.create_arc(cx - half_width, top, cx + half_width, top + size * 0.6,
-                          start=35, extent=110, style="arc", outline=glyph,
-                          width=_stroke(size), tags=TAG)
-
-
 def lettered(name: str, canvas, cx, cy, size, enabled) -> None:
-    """Fallback for apps without a known icon: a tile with the initial."""
+    """Apps without a bundled logo: a tile with the initial."""
     initial = (name.strip()[:1] or "?").upper()
     _tile(canvas, cx, cy, size, size, GENERIC_TILE if enabled else DIM_TILE)
     _letters(canvas, cx, cy, size, initial, theme.TEXT if enabled else DIM_GLYPH, 0.52)

@@ -18,9 +18,9 @@ from ..pairing import PairingError, PairingSession
 from ..remote import RemoteClient
 from . import theme
 from .icons import app_icon
-from .theme import (ACCENT, ACCENT_HOVER, BG, BTN, BTN_HOVER, MUTED, PANEL,
-                    POWER_BG, POWER_HOVER, TEXT, px)
-from .widgets import EvenRow, RoundButton, Tooltip
+from .theme import (ACCENT, ACCENT_HOVER, BG, BTN, BTN_HOVER, MUTED,
+                    PANEL, POWER_BG, POWER_HOVER, TEXT, px)
+from .widgets import EvenRow, Placeholder, RoundButton, Tooltip, VolumeMeter
 
 APP_TITLE = "Google TV Remote"
 ICON_FILE = "app.ico"
@@ -29,6 +29,51 @@ AUTO_CONNECT_DELAY_MS = 250
 LOG_MAX_BYTES = 256_000                 # the connection log rotates once at this size
 MAX_APP_LABEL = 44
 MAX_APPS_PER_ROW = 6
+
+#: Friendly names for the foreground-app readout. Unknown packages are shown
+#: as-is (and truncated), so this only ever improves the common cases.
+APP_NAMES = {
+    "com.google.android.youtube.tv": "YouTube",
+    "com.google.android.youtube.tvunplugged": "YouTube",
+    "com.google.android.youtube.tvkids": "YouTube Kids",
+    "com.netflix.ninja": "Netflix",
+    "com.amazon.amazonvideo.livingroom": "Prime Video",
+    "com.disney.disneyplus": "Disney+",
+    "com.spotify.tv.android": "Spotify",
+    "com.spotify.music": "Spotify",
+    "com.google.android.tvlauncher": "Home",
+    "com.google.android.apps.tv.launcherx": "Home",
+    "com.google.android.tvrecommendations": "Home",
+    "com.google.android.tv": "Live TV",
+    "com.google.android.videos": "Google TV",
+    "com.google.android.katniss": "Google Assistant",
+    "com.android.tv.settings": "Settings",
+    "com.plexapp.android": "Plex",
+    "org.xbmc.kodi": "Kodi",
+    "tv.twitch.android.app": "Twitch",
+    "com.hbo.hbonow": "Max",
+    "com.wbd.stream": "Max",
+    "com.apple.atve.androidtv.appletv": "Apple TV",
+}
+
+
+def friendly_app_name(package: str) -> str:
+    """A readable name for a foreground package, or the package unchanged."""
+    return APP_NAMES.get(package, package)
+
+
+#: Shown in the Shortcuts popup. The app is keyboard-first (see the README),
+#: but nothing on screen said so until this.
+SHORTCUTS = [
+    ("↑ ↓ ← →", "Move around"),
+    ("Enter", "OK / select"),
+    ("Backspace  ·  Esc", "Back"),
+    ("Home", "Home screen"),
+    ("Space", "Play / Pause"),
+    ("+   −   M", "Volume up, down, mute"),
+    ("Just start typing", "Goes to the TV's text box; Enter submits"),
+    ("Ctrl +   Ctrl −   Ctrl 0", "Resize the window, or reset"),
+]
 
 
 def icon_path() -> Path | None:
@@ -70,6 +115,9 @@ class RemoteApp:
         self._buttons: list[RoundButton] = []
         self._last_status = "disconnected"
         self._app_text = ""                  # full text behind the fitted app label
+        self._volume = (0, 0, False)         # last (level, maximum, muted) from the TV
+        self._volume_known = False           # has the TV reported volume this session
+        self._help_win: tk.Toplevel | None = None
         self._pump_job: str | None = None
         theme.apply_scale(self.settings.get("ui_scale", theme.DEFAULT_SCALE))
 
@@ -127,7 +175,7 @@ class RemoteApp:
             return
         host = self.host_var.get()
         status_key, status_text = self._last_status, self.status_var.get()
-        volume, app_text = self.volume_var.get(), self._app_text
+        volume, app_text = self._volume, self._app_text
 
         theme.apply_scale(scale)
         self.settings["ui_scale"] = theme.SCALE
@@ -139,7 +187,10 @@ class RemoteApp:
         self._build()
 
         self.host_var.set(host)
-        self.volume_var.set(volume)
+        if self._volume_known:
+            self._update_volume(*volume)
+        else:
+            self._clear_volume()
         self._set_app_text(app_text)
         self._set_status(status_key, status_text)
         self._show_connected(self._is_connected())
@@ -179,8 +230,10 @@ class RemoteApp:
 
     def _entry(self, parent, variable: tk.StringVar) -> tuple[tk.Entry, int]:
         """A text box plus the ``ipady`` that makes it as tall as the buttons."""
+        # The small font: an address or a search term, not a heading. The
+        # box still stretches to button height through ipady below.
         entry = tk.Entry(parent, textvariable=variable, bg=BTN, fg=TEXT,
-                         insertbackground=TEXT, relief="flat", font=theme.FONT,
+                         insertbackground=TEXT, relief="flat", font=theme.FONT_SMALL,
                          highlightthickness=1, highlightbackground=BTN,
                          highlightcolor=ACCENT)
         ipady = max(0, (px(theme.BUTTON_HEIGHT) - entry.winfo_reqheight()) // 2)
@@ -206,6 +259,7 @@ class RemoteApp:
         self.host_entry.pack(side="left", fill="x", expand=True, ipady=ipady,
                              padx=(0, px(theme.COL_GAP)))
         self.host_entry.bind("<Return>", lambda _e: self.toggle_connection())
+        Placeholder(self.host_entry, self.host_var, "TV IP address")
 
         # fill="y" keeps the buttons exactly as tall as the box beside them.
         self.scan_btn = RoundButton(inner, text="Scan", command=self.scan_devices,
@@ -226,8 +280,9 @@ class RemoteApp:
         self._dot = self.status_dot.create_oval(1, 1, dot - 1, dot - 1, fill=MUTED, outline="")
         self.status_dot.pack(side="left", padx=(px(2), px(6)))
         self.status_var = tk.StringVar(value="Not connected")
-        tk.Label(row, textvariable=self.status_var, bg=BG, fg=MUTED,
-                 font=theme.FONT_SMALL, anchor="w").pack(side="left", fill="x", expand=True)
+        self._status_label = tk.Label(row, textvariable=self.status_var, bg=BG, fg=MUTED,
+                                      font=theme.FONT_SMALL, anchor="w")
+        self._status_label.pack(side="left", fill="x", expand=True)
 
     def _build_top_row(self, parent) -> None:
         row = self._row(parent)
@@ -275,8 +330,9 @@ class RemoteApp:
         row = self._row(parent)
         row.add(self._key_button(row, "\U0001f509", keycodes.KEYCODE_VOLUME_DOWN,
                                  font=theme.FONT_ICON, repeat=True, tooltip="Volume down  (-)"))
-        row.add(self._key_button(row, "\U0001f507", keycodes.KEYCODE_VOLUME_MUTE,
-                                 font=theme.FONT_ICON, tooltip="Mute  (M)"))
+        self.mute_btn = self._key_button(row, "\U0001f507", keycodes.KEYCODE_VOLUME_MUTE,
+                                         font=theme.FONT_ICON, tooltip="Mute  (M)")
+        row.add(self.mute_btn)
         row.add(self._key_button(row, "\U0001f50a", keycodes.KEYCODE_VOLUME_UP,
                                  font=theme.FONT_ICON, repeat=True, tooltip="Volume up  (+)"))
 
@@ -300,6 +356,7 @@ class RemoteApp:
         self.text_entry.pack(side="left", fill="x", expand=True, ipady=ipady,
                              padx=(0, px(theme.COL_GAP)))
         self.text_entry.bind("<Return>", lambda _e: self.send_text())
+        Placeholder(self.text_entry, self.text_var, "Text for the TV")
         tools = [
             ("⌫", self.backspace, "Delete the last character on the TV"),
             ("✕", self.clear_text, "Clear the text field on the TV"),
@@ -322,7 +379,7 @@ class RemoteApp:
         for index, chunk in enumerate(balanced_rows(apps, MAX_APPS_PER_ROW)):
             row = self._row(section, gap=theme.ROW_GAP if index else 0)
             for name, link in chunk:
-                button = RoundButton(row, icon=app_icon(name), width=44,
+                button = RoundButton(row, icon=app_icon(name), width=44, icon_size=30,
                                      height=theme.BUTTON_HEIGHT, tooltip=name,
                                      command=lambda l=link, n=name: self.launch_app(l, n))
                 self._buttons.append(row.add(button))
@@ -330,10 +387,10 @@ class RemoteApp:
     def _build_footer(self, parent) -> None:
         row = tk.Frame(parent, bg=BG)
         row.pack(fill="x", side="bottom", pady=(px(4), 0))
-        link = tk.Label(row, text="Re-pair", bg=BG, fg=MUTED, font=theme.FONT_SMALL,
-                        cursor="hand2")
-        link.pack(side="right")
-        link.bind("<Button-1>", lambda _e: self.repair())
+        self._footer_link(row, "Re-pair", self.repair,
+                          "Pair again if the TV has forgotten this remote")
+        self._footer_link(row, "Shortcuts", self._show_shortcuts,
+                          "Keyboard shortcuts", pad=(0, px(12)))
 
         self.auto_var = tk.BooleanVar(value=bool(self.settings.get("auto_connect", True)))
         auto = tk.Checkbutton(
@@ -347,27 +404,84 @@ class RemoteApp:
         # What the TV reports: foreground app (or power state) and volume.
         info = tk.Frame(parent, bg=BG)
         info.pack(fill="x", side="bottom", pady=(px(theme.ROW_GAP), 0))
-        # Pack the right-hand label first so the expanding one cannot cover it.
+        # The volume group sits on the right: a speaker glyph, a level bar and
+        # the number. Pack it first so the expanding app label cannot cover it.
+        self._volbox = tk.Frame(info, bg=BG)
+        self._volbox.pack(side="right", padx=(px(8), 0))
         self.volume_var = tk.StringVar(value="")
-        self._volume_label = tk.Label(info, textvariable=self.volume_var, bg=BG, fg=MUTED,
-                                      font=theme.FONT_SMALL, anchor="e")
-        self._volume_label.pack(side="right", padx=(px(8), 0))
+        self._vol_speaker = tk.Label(self._volbox, text="", bg=BG, fg=MUTED,
+                                     font=theme.FONT_ICON_SMALL)
+        self._vol_speaker.pack(side="left")
+        self._vol_meter = VolumeMeter(self._volbox)
+        self._vol_meter.pack(side="left", padx=(px(5), px(5)))
+        self._volume_label = tk.Label(self._volbox, textvariable=self.volume_var, bg=BG,
+                                      fg=MUTED, font=theme.FONT_SMALL, anchor="e")
+        self._volume_label.pack(side="left")
         self.app_var = tk.StringVar(value="")
         tk.Label(info, textvariable=self.app_var, bg=BG, fg=MUTED,
                  font=theme.FONT_SMALL, anchor="w").pack(side="left", fill="x", expand=True)
         self._info = info
         self._small_font = tkfont.Font(font=theme.FONT_SMALL)
         info.bind("<Configure>", lambda _e: self._refresh_app_label())
+        self._vol_meter.clear()
+
+    def _footer_link(self, parent, text, command, tip: str, pad=(0, 0)) -> tk.Label:
+        link = tk.Label(parent, text=text, bg=BG, fg=MUTED, font=theme.FONT_SMALL,
+                        cursor="hand2")
+        link.pack(side="right", padx=pad)
+        link.bind("<Button-1>", lambda _e: command())
+        link.bind("<Enter>", lambda _e: link.configure(fg=TEXT))
+        link.bind("<Leave>", lambda _e: link.configure(fg=MUTED))
+        if tip:
+            Tooltip(link, tip)
+        return link
 
     def _set_app_text(self, text: str) -> None:
         self._app_text = text
         self._refresh_app_label()
 
+    def _update_volume(self, level: int, maximum: int, muted: bool) -> None:
+        """Reflect the TV's volume in the number, the bar and the mute button."""
+        self._volume = (level, maximum, muted)
+        self._volume_known = True
+        if muted:
+            self.volume_var.set("muted")
+        elif maximum:
+            self.volume_var.set(f"vol {level}/{maximum}")
+        else:
+            self.volume_var.set(f"vol {level}")
+        self._volume_label.configure(fg=MUTED if muted else TEXT)
+        self._vol_speaker.configure(text=self._speaker_glyph(level, maximum, muted),
+                                    fg=MUTED if muted else TEXT)
+        self._vol_meter.set(level, maximum, muted)
+        self.mute_btn.set_active(muted, theme.TOGGLE, theme.TOGGLE_HOVER)
+        self._refresh_app_label()                   # the readout changed width
+
+    def _clear_volume(self) -> None:
+        self._volume = (0, 0, False)
+        self._volume_known = False
+        self.volume_var.set("")
+        self._vol_speaker.configure(text="")
+        self._vol_meter.clear()
+        self.mute_btn.set_active(False)
+        self._refresh_app_label()
+
+    @staticmethod
+    def _speaker_glyph(level: int, maximum: int, muted: bool) -> str:
+        if muted:
+            return "\U0001f507"                     # muted speaker
+        ratio = (level / maximum) if maximum else 0.0
+        if ratio <= 0:
+            return "\U0001f508"                     # speaker, no waves
+        if ratio < 0.5:
+            return "\U0001f509"                     # one wave
+        return "\U0001f50a"                         # full
+
     def _refresh_app_label(self) -> None:
         """Show as much of the app text as fits beside the volume readout."""
         text = self._app_text
         try:
-            available = (self._info.winfo_width() - self._volume_label.winfo_reqwidth()
+            available = (self._info.winfo_width() - self._volbox.winfo_reqwidth()
                          - px(8))
             if available > px(40):                      # laid out: measure for real
                 text = fit_text(self._small_font, text, available)
@@ -505,7 +619,7 @@ class RemoteApp:
         if update_ui:
             self._set_status("disconnected", "Disconnected")
             self._show_connected(False)
-            self.volume_var.set("")
+            self._clear_volume()
             self._set_app_text("")
 
     def send_key(self, key_code: int, button: RoundButton | None = None) -> None:
@@ -695,6 +809,42 @@ class RemoteApp:
                 APP_TITLE, "This TV does not recognise this remote yet.\n\nPair with it now?"):
             self.repair(confirm=False)
 
+    def _show_shortcuts(self) -> None:
+        """A small, themed cheat-sheet of the keyboard controls."""
+        existing = self._help_win
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_set()
+            return
+
+        win = tk.Toplevel(self.root, bg=BG)
+        self._help_win = win
+        win.title("Keyboard shortcuts")
+        win.transient(self.root)
+        win.resizable(False, False)
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+        body = tk.Frame(win, bg=BG)
+        body.pack(fill="both", expand=True, padx=px(18), pady=px(16))
+        tk.Label(body, text="Keyboard control", bg=BG, fg=TEXT,
+                 font=(theme.UI_FONT, theme.FONT[1], "bold")).grid(
+                     row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(body, text="Keep this window focused - the mouse is optional.",
+                 bg=BG, fg=MUTED, font=theme.FONT_SMALL).grid(
+                     row=1, column=0, columnspan=2, sticky="w", pady=(0, px(10)))
+        for index, (keys, desc) in enumerate(SHORTCUTS):
+            tk.Label(body, text=keys, bg=BTN, fg=TEXT, font=theme.FONT_SMALL,
+                     padx=px(9), pady=px(4)).grid(
+                         row=index + 2, column=0, sticky="w", padx=(0, px(12)), pady=px(3))
+            tk.Label(body, text=desc, bg=BG, fg=MUTED, font=theme.FONT_SMALL,
+                     anchor="w").grid(row=index + 2, column=1, sticky="w", pady=px(3))
+
+        win.update_idletasks()
+        root_x, root_y = self.root.winfo_rootx(), self.root.winfo_rooty()
+        offset_x = (self.root.winfo_width() - win.winfo_width()) // 2
+        win.geometry(f"+{root_x + max(0, offset_x)}+{root_y + px(40)}")
+        win.focus_set()
+
     # -------------------------------------------------------- event pump --
 
     def _post(self, event: tuple) -> None:
@@ -722,17 +872,11 @@ class RemoteApp:
                 self._offer_pairing()
         elif kind == "volume":
             _, level, maximum, muted = event
-            if muted:
-                self.volume_var.set("muted")
-            elif maximum:
-                self.volume_var.set(f"vol {level}/{maximum}")
-            else:
-                self.volume_var.set(f"vol {level}")
-            self._refresh_app_label()               # the volume readout changed width
+            self._update_volume(level, maximum, muted)
         elif kind == "power":
             self._set_app_text("TV is on" if event[1] else "TV is in standby")
         elif kind == "app":
-            self._set_app_text(event[1])
+            self._set_app_text(friendly_app_name(event[1]))
         elif kind == "field":
             if event[1] is not None:
                 self._set_status("connected", "TV text box active - just type; Enter submits")
@@ -756,6 +900,7 @@ class RemoteApp:
     def _set_status(self, status: str, detail: str) -> None:
         self._last_status = status
         self.status_dot.itemconfig(self._dot, fill=theme.STATUS_COLORS.get(status, MUTED))
+        self._status_label.configure(fg=theme.STATUS_TEXT_COLORS.get(status, MUTED))
         self.status_var.set(detail)
 
     def on_close(self) -> None:

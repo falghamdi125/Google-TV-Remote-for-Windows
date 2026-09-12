@@ -43,7 +43,7 @@ gtvremote-gui = "gtvremote.ui:main"
 packages = ["gtvremote", "gtvremote.ui"]
 
 [tool.setuptools.package-data]
-gtvremote = ["assets/*.ico"]
+gtvremote = ["assets/*.ico", "assets/icons/*.png"]
 
 [tool.setuptools.dynamic]
 version = { attr = "gtvremote.__version__" }

@@ -14,6 +14,7 @@ python -m PyInstaller --noconfirm --clean ^
     --name GoogleTVRemote ^
     --icon gtvremote\assets\app.ico ^
     --add-data "gtvremote\assets\app.ico;gtvremote\assets" ^
+    --add-data "gtvremote\assets\icons;gtvremote\assets\icons" ^
     GoogleTVRemote.pyw || goto :failed
 
 echo.

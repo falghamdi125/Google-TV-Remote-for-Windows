@@ -20,13 +20,29 @@ WARNING = "#fbbc04"
 OK_GREEN = "#34a853"
 TEXT = "#e8eaed"
 MUTED = "#9aa0a6"
+FAINT = "#5f6672"         # placeholder text, hairlines
 POWER_BG = "#3a2126"
 POWER_HOVER = "#54282f"
+TOGGLE = "#2f4a80"        # a control that is currently engaged (e.g. mute on)
+TOGGLE_HOVER = "#38589a"
+METER_TRACK = "#33373f"
+METER_FILL = ACCENT
 TOOLTIP_BG = "#000000"
 
 #: Status-dot colour for each RemoteClient state.
 STATUS_COLORS = {
     "connected": OK_GREEN,
+    "connecting": WARNING,
+    "reconnecting": WARNING,
+    "error": DANGER,
+    "unpaired": DANGER,
+    "disconnected": MUTED,
+}
+
+#: Status-*text* colour for each state - brighter than the always-muted text
+#: it replaced, so the state reads without hunting for the dot.
+STATUS_TEXT_COLORS = {
+    "connected": TEXT,
     "connecting": WARNING,
     "reconnecting": WARNING,
     "error": DANGER,
@@ -58,6 +74,7 @@ ICON_FONT = "Segoe UI Symbol"
 SCALE = DEFAULT_SCALE
 FONT: tuple[str, int] = (UI_FONT, 15)
 FONT_SMALL: tuple[str, int] = (UI_FONT, 13)
+FONT_ICON_SMALL: tuple[str, int] = (ICON_FONT, 15)
 FONT_ICON: tuple[str, int] = (ICON_FONT, 20)
 FONT_ICON_BIG: tuple[str, int] = (ICON_FONT, 24)
 
@@ -68,10 +85,11 @@ def clamp_scale(scale: float) -> float:
 
 def apply_scale(scale: float) -> None:
     """Recompute the font set for a new scale factor."""
-    global SCALE, FONT, FONT_SMALL, FONT_ICON, FONT_ICON_BIG
+    global SCALE, FONT, FONT_SMALL, FONT_ICON_SMALL, FONT_ICON, FONT_ICON_BIG
     SCALE = clamp_scale(scale)
     FONT = (UI_FONT, max(8, round(10 * SCALE)))
     FONT_SMALL = (UI_FONT, max(7, round(8.5 * SCALE)))
+    FONT_ICON_SMALL = (ICON_FONT, max(8, round(10 * SCALE)))
     FONT_ICON = (ICON_FONT, max(9, round(13 * SCALE)))
     FONT_ICON_BIG = (ICON_FONT, max(11, round(16 * SCALE)))
 

@@ -199,6 +199,37 @@ class WindowTest(unittest.TestCase):
         self.app._set_controls_enabled(True)
         self.assertTrue(all(b.find_withtag("icon") for b in app_buttons))
 
+    def test_foreground_app_shows_a_friendly_name(self):
+        self.app._handle_event(("app", "com.netflix.ninja"))
+        self.assertEqual(self.app.app_var.get(), "Netflix")
+        self.app._handle_event(("app", "com.unknown." + "x" * 60))
+        self.assertLessEqual(len(self.app.app_var.get()), window.MAX_APP_LABEL)
+
+    def test_volume_drives_the_bar_and_the_mute_button(self):
+        self.app._handle_event(("state", "connected", "Connected"))
+        self.app._handle_event(("volume", 50, 100, False))
+        self.assertEqual(self.app.volume_var.get(), "vol 50/100")
+        self.assertFalse(self.app.mute_btn._active, "not muted -> button rests")
+        self.app._handle_event(("volume", 50, 100, True))
+        self.assertEqual(self.app.volume_var.get(), "muted")
+        self.assertTrue(self.app.mute_btn._active, "muted -> button engaged")
+        self.app.disconnect()
+        self.assertEqual(self.app.volume_var.get(), "")
+        self.assertFalse(self.app.mute_btn._active)
+
+    def test_shortcuts_popup_opens_once_and_reopens(self):
+        self.app._show_shortcuts()
+        win = self.app._help_win
+        self.assertIsNotNone(win)
+        self.assertTrue(win.winfo_exists())
+        self.app._show_shortcuts()                      # already open: same window
+        self.assertIs(self.app._help_win, win)
+        win.destroy()
+        self.root.update()
+        self.app._show_shortcuts()                      # closed: a fresh one
+        self.assertTrue(self.app._help_win.winfo_exists())
+        self.assertIsNot(self.app._help_win, win)
+
     def test_rescale_rebuilds_the_window_and_keeps_state(self):
         before = len(self.app._buttons)
         self.app.host_var.set("192.168.1.9")
@@ -226,6 +257,25 @@ class IconTest(unittest.TestCase):
         self.assertIs(icons.app_icon("Prime Video"), icons.prime_video)
         self.assertIs(icons.app_icon("Amazon Prime"), icons.prime_video)
         self.assertIsNot(icons.app_icon("Plex"), icons.youtube)
+
+    def test_bundled_logos_are_images_at_the_nearest_size(self):
+        icons.youtube(self.canvas, 20, 20, 37, True)
+        (item,) = self.canvas.find_withtag("icon")
+        self.assertEqual(self.canvas.type(item), "image")
+        self.assertEqual(icons.icon_file("youtube", 37, True).name, "youtube-36.png")
+        self.assertEqual(icons.icon_file("youtube", 37, False).name, "youtube-36-dim.png")
+        self.assertEqual(icons.icon_file("youtube", 500, True).name,
+                         f"youtube-{max(icons.SIZES)}.png")
+        for slug in ("youtube", "netflix", "primevideo", "disneyplus", "spotify"):
+            for size in icons.SIZES:
+                for enabled in (True, False):
+                    self.assertIsNotNone(icons.icon_file(slug, size, enabled), (slug, size))
+
+    def test_a_missing_logo_falls_back_to_the_lettered_tile(self):
+        icons.bitmap("nosuchapp", "Nosuch")(self.canvas, 20, 20, 24, True)
+        kinds = {self.canvas.type(item) for item in self.canvas.find_withtag("icon")}
+        self.assertEqual(kinds, {"polygon", "text"})
+        self.assertIsNone(icons.icon_file("nosuchapp", 24, True))
 
     def test_every_icon_draws_in_both_states(self):
         for name in ("YouTube", "Netflix", "Prime Video", "Disney+", "Spotify", "Plex", ""):

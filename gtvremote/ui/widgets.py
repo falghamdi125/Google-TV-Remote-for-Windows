@@ -6,7 +6,8 @@ import tkinter as tk
 from typing import Callable
 
 from . import theme
-from .theme import ACCENT, BTN, BTN_ACTIVE, BTN_HOVER, MUTED, TEXT, TOOLTIP_BG, px
+from .theme import (ACCENT, ACCENT_HOVER, BTN, BTN_ACTIVE, BTN_HOVER, FAINT,
+                    METER_FILL, METER_TRACK, MUTED, TEXT, TOOLTIP_BG, px)
 
 REPEAT_DELAY_MS = 500
 REPEAT_INTERVAL_MS = 120
@@ -40,6 +41,9 @@ class RoundButton(tk.Canvas):
         self.command = command
         self._fill = fill
         self._hover = hover
+        self._base_fill = fill          # the resting colours, restored when un-toggled
+        self._base_hover = hover
+        self._active = False
         self._fg = fg
         self._repeat = repeat
         self._repeat_job = None
@@ -114,9 +118,17 @@ class RoundButton(tk.Canvas):
         self._grow_to_fit()
 
     def set_fill(self, fill: str, hover: str | None = None) -> None:
-        self._fill = fill
-        self._hover = hover or fill
-        self.itemconfig(self._shape, fill=fill)
+        self._fill = self._base_fill = fill
+        self._hover = self._base_hover = hover or fill
+        if not self._active:
+            self.itemconfig(self._shape, fill=fill)
+
+    def set_active(self, active: bool, fill: str = ACCENT, hover: str = ACCENT_HOVER) -> None:
+        """Show the button as engaged (e.g. mute is on) with a held colour."""
+        self._active = active
+        self._fill = fill if active else self._base_fill
+        self._hover = hover if active else self._base_hover
+        self.itemconfig(self._shape, fill=self._fill)
 
     def flash(self) -> None:
         """Brief visual confirmation that a key was sent."""
@@ -224,3 +236,75 @@ class Tooltip:
         if self.window:
             self.window.destroy()
             self.window = None
+
+
+class Placeholder:
+    """Grey hint text shown over an empty Entry, e.g. "TV IP address".
+
+    A label laid over the box, not text in the variable, so the app always
+    reads a real value from the entry - never the hint. It clears the moment
+    anything is typed and returns when the box is emptied again.
+    """
+
+    def __init__(self, entry: tk.Entry, variable: tk.StringVar, text: str) -> None:
+        self.entry = entry
+        self.variable = variable
+        # A size down from the entry's own text: a hint, not a value.
+        self.label = tk.Label(entry, text=text, bg=entry["bg"], fg=FAINT,
+                              font=theme.FONT_SMALL, bd=0, cursor="xterm")
+        self.label.bind("<Button-1>", lambda _e: entry.focus_set())
+        variable.trace_add("write", self._refresh)
+        entry.bind("<Destroy>", lambda _e: self._forget(), add="+")
+        self._refresh()
+
+    def _refresh(self, *_args) -> None:
+        try:
+            if self.variable.get():
+                self.label.place_forget()
+            else:
+                self.label.place(x=px(7), rely=0.5, anchor="w")
+        except tk.TclError:
+            pass                                        # trace fired during teardown
+
+    def _forget(self) -> None:
+        try:
+            self.label.place_forget()
+        except tk.TclError:
+            pass
+
+
+class VolumeMeter(tk.Canvas):
+    """A slim rounded bar that fills to the TV's volume level.
+
+    ``set`` shows a track with a proportional fill; ``clear`` blanks it while
+    disconnected. Muted is drawn dim so the number beside it ("muted") is not
+    the only cue.
+    """
+
+    def __init__(self, parent, width: int = 60, height: int = 6) -> None:
+        w, h = px(width), px(height)
+        super().__init__(parent, width=w, height=h, bg=parent["bg"],
+                         highlightthickness=0, bd=0)
+        cy = h / 2
+        self._x0, self._x1 = h / 2, w - h / 2
+        self._track = self.create_line(self._x0, cy, self._x1, cy, width=h,
+                                       fill=METER_TRACK, capstyle=tk.ROUND)
+        self._bar = self.create_line(self._x0, cy, self._x0, cy, width=h,
+                                     fill=METER_FILL, capstyle=tk.ROUND, state="hidden")
+        self._cy = cy
+
+    def set(self, level: int, maximum: int, muted: bool) -> None:
+        self.itemconfig(self._track, state="normal")
+        ratio = (level / maximum) if maximum else 0.0
+        ratio = max(0.0, min(1.0, ratio))
+        if ratio <= 0:
+            self.itemconfig(self._bar, state="hidden")
+            return
+        end = self._x0 + (self._x1 - self._x0) * ratio
+        self.coords(self._bar, self._x0, self._cy, end, self._cy)
+        self.itemconfig(self._bar, state="normal",
+                        fill=MUTED if muted else METER_FILL)
+
+    def clear(self) -> None:
+        self.itemconfig(self._track, state="hidden")
+        self.itemconfig(self._bar, state="hidden")

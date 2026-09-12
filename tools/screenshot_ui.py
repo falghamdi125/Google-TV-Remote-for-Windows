@@ -37,6 +37,14 @@ def main(argv: list[str]) -> int:
         root = tk.Tk()
         app = RemoteApp(root)
 
+    # Screenshot only: a stray keypress while the window grabs focus would
+    # fire a key (and, with no real connection, flip the status to an error).
+    # Unbind the hotkeys so the frozen display state cannot be perturbed.
+    for sequence in ("<Key>", "<Up>", "<Down>", "<Left>", "<Right>", "<Return>",
+                     "<BackSpace>", "<Escape>", "<space>", "<Home>",
+                     "<plus>", "<equal>", "<minus>", "<m>"):
+        root.unbind(sequence)
+
     app.host_var.set("192.168.1.42")
     root.geometry("+60+30")
     root.update_idletasks()

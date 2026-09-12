@@ -22,8 +22,8 @@ on and pair once.
   media keys with auto-repeat, and an **Input** menu that switches HDMI / AV /
   tuner directly on TCL sets (key codes for other makers, or your own input
   ids).
-* **One-tap app icons** for YouTube, Netflix, Prime Video, Disney+ and
-  Spotify - replace them with any app you like.
+* **One-tap app buttons** with the apps' own logos for YouTube, Netflix,
+  Prime Video, Disney+ and Spotify - replace them with any app you like.
 * **Live status from the TV**: volume, power state, foreground app, and
   whether a text box is waiting for input.
 * **Zero setup on the TV**: find it with a network scan, pair once with the
@@ -77,6 +77,9 @@ you never need the mouse.
 | `+` / `-` | Volume up / down |
 | `M` | Mute |
 | `Ctrl` `+` / `Ctrl` `-` / `Ctrl` `0` | Resize the interface / reset |
+
+The same list is a click away in the app: press **Shortcuts** at the bottom
+of the window.
 
 **Typing on the TV.** Whenever the TV has a text box focused (a search box,
 a login form...), the status bar says *TV text box active - just type*:
@@ -197,9 +200,10 @@ for the generated `keycodes.py`.
 | `gtvremote/inputs.py` | input switching: per-vendor passthrough links and key codes |
 | `gtvremote/keycodes.py` | Android key codes, generated from the proto |
 | `gtvremote/ui/` | tkinter interface: `theme.py`, `widgets.py`, `icons.py`, `window.py` |
+| `gtvremote/assets/icons/` | the app logos as PNGs at every size, rendered by `tools/render_icons.py` |
 | `proto/` | the protocol's `.proto` files, for reference and the tests |
 | `tests/` | unit tests, a mock TV, and the protobufjs cross-check |
-| `tools/` | `gen_keycodes.py`, `screenshot_ui.py` |
+| `tools/` | `gen_keycodes.py`, `render_icons.py` (+ the `icons/*.svg` glyphs), `screenshot_ui.py` |
 
 ## Development
 
@@ -207,6 +211,7 @@ for the generated `keycodes.py`.
 pip install -e ".[build,dev]"
 python -m unittest -v            # protocol vs. a mock TV, UI, parsers, discovery
 python tools/gen_keycodes.py     # regenerate keycodes.py after editing the proto
+python tools/render_icons.py     # re-render the app logos (tools/icons/*.svg -> assets/icons)
 build_exe.bat                    # dist\GoogleTVRemote.exe
 ```
 
@@ -259,3 +264,8 @@ input ids to `settings.json` as described under *Settings*.
 ## License
 
 [MIT](LICENSE)
+
+The app logos on the shortcut buttons are trademarks of their respective
+owners and appear only to identify the apps the buttons open. The glyphs are
+the CC0 files published by [Simple Icons](https://simpleicons.org); Disney+
+has no such glyph, so its tile shows the name in a script face instead.
