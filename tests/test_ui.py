@@ -65,6 +65,7 @@ class WindowTest(unittest.TestCase):
         return sum(1 for button in self.app._buttons if button._enabled)
 
     def test_builds_every_control_disabled(self):
+        self.assertEqual(self.root.title(), f"{window.APP_TITLE} {window.__version__}")
         self.assertGreaterEqual(len(self.app._buttons), 20)
         self.assertEqual(self.enabled_buttons(), 0)
         self.assertEqual(self.app.status_var.get(), "Not connected")

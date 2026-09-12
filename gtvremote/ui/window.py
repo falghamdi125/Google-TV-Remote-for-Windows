@@ -121,7 +121,7 @@ class RemoteApp:
         self._pump_job: str | None = None
         theme.apply_scale(self.settings.get("ui_scale", theme.DEFAULT_SCALE))
 
-        root.title(APP_TITLE)
+        root.title(f"{APP_TITLE} {__version__}")
         root.configure(bg=BG)
         self._set_icon()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
