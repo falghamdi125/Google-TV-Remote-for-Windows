@@ -1,10 +1,14 @@
-"""App icons for the shortcut buttons.
+"""Icons drawn onto the buttons.
 
 The bundled apps show their real logos: PNGs in ``gtvremote/assets/icons``,
 rendered by ``tools/render_icons.py`` from the brand glyphs at every size
 the interface can ask for, each in an enabled and a dimmed variant. Any
 other app gets a neutral tile with the first letter of its name, drawn
 straight onto the canvas.
+
+The text row tools (backspace, clear, send) are drawn with lines and
+polygons: Segoe UI Symbol renders their glyphs thin, with colour fringes,
+and at widths that differ enough to make the buttons uneven.
 
 Every drawing function has the signature ``(canvas, cx, cy, size, enabled)``
 and tags what it draws with ``"icon"`` so the button can redraw it.
@@ -104,6 +108,51 @@ def lettered(name: str, canvas, cx, cy, size, enabled) -> None:
     initial = (name.strip()[:1] or "?").upper()
     _tile(canvas, cx, cy, size, size, GENERIC_TILE if enabled else DIM_TILE)
     _letters(canvas, cx, cy, size, initial, theme.TEXT if enabled else DIM_GLYPH, 0.52)
+
+
+# ------------------------------------------------------------ tool icons ---
+
+def _stroke(size: int) -> int:
+    return max(2, round(size * 0.1))
+
+
+def _glyph(enabled: bool) -> str:
+    return theme.TEXT if enabled else DIM_GLYPH
+
+
+def backspace(canvas, cx, cy, size, enabled) -> None:
+    """A key cap pointing left with a cross inside."""
+    colour, stroke = _glyph(enabled), _stroke(size)
+    w, h = size - stroke, (size - stroke) * 0.62
+    left, right, top, bottom = cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
+    shoulder = left + h * 0.55                  # where the point meets the body
+    canvas.create_polygon(left, cy, shoulder, top, right, top, right, bottom,
+                          shoulder, bottom, fill="", outline=colour, width=stroke,
+                          joinstyle=tk.ROUND, tags=TAG)
+    bx, r = (shoulder + right) / 2, h * 0.19
+    for flip in (-1, 1):
+        canvas.create_line(bx - flip * r, cy - r, bx + flip * r, cy + r, fill=colour,
+                           width=stroke, capstyle=tk.ROUND, tags=TAG)
+
+
+def clear(canvas, cx, cy, size, enabled) -> None:
+    """A cross: wipe the whole field."""
+    colour, stroke = _glyph(enabled), _stroke(size)
+    r = size * 0.28
+    for flip in (-1, 1):
+        canvas.create_line(cx - flip * r, cy - r, cx + flip * r, cy + r, fill=colour,
+                           width=stroke, capstyle=tk.ROUND, tags=TAG)
+
+
+def send(canvas, cx, cy, size, enabled) -> None:
+    """A paper plane pointing right."""
+    colour = _glyph(enabled)
+    w, h = size, size * 0.78
+    left, right, top, bottom = cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
+    notch = left + w * 0.3
+    canvas.create_polygon(left, top, right, cy, left, bottom, notch, cy,
+                          fill=colour, outline=colour, width=2, joinstyle=tk.ROUND,
+                          tags=TAG)
 
 
 # Matched against the lower-cased app name, first hit wins.

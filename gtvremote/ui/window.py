@@ -16,11 +16,10 @@ from tkinter import messagebox, simpledialog
 from .. import __version__, config, discovery, inputs, keycodes
 from ..pairing import PairingError, PairingSession
 from ..remote import RemoteClient
-from . import theme
-from .icons import app_icon
+from . import icons, theme
 from .theme import (ACCENT, ACCENT_HOVER, BG, BTN, BTN_HOVER, MUTED,
                     PANEL, POWER_BG, POWER_HOVER, TEXT, px)
-from .widgets import EvenRow, Placeholder, RoundButton, Tooltip, VolumeMeter
+from .widgets import EvenRow, RoundButton, RoundEntry, Tooltip, VolumeMeter
 
 APP_TITLE = "Google TV Remote"
 ICON_FILE = "app.ico"
@@ -228,17 +227,6 @@ class RemoteApp:
         row.pack(fill="x", pady=(px(gap), 0))
         return row
 
-    def _entry(self, parent, variable: tk.StringVar) -> tuple[tk.Entry, int]:
-        """A text box plus the ``ipady`` that makes it as tall as the buttons."""
-        # The small font: an address or a search term, not a heading. The
-        # box still stretches to button height through ipady below.
-        entry = tk.Entry(parent, textvariable=variable, bg=BTN, fg=TEXT,
-                         insertbackground=TEXT, relief="flat", font=theme.FONT_SMALL,
-                         highlightthickness=1, highlightbackground=BTN,
-                         highlightcolor=ACCENT)
-        ipady = max(0, (px(theme.BUTTON_HEIGHT) - entry.winfo_reqheight()) // 2)
-        return entry, ipady
-
     def _key_button(self, parent, text, key_code, **kwargs) -> RoundButton:
         """A remote button that injects ``key_code`` and flashes on send."""
         kwargs.setdefault("height", theme.BUTTON_HEIGHT)
@@ -254,22 +242,21 @@ class RemoteApp:
         inner.pack(fill="x", padx=px(theme.PANEL_PAD), pady=px(theme.PANEL_PAD))
 
         self.host_var = tk.StringVar()
-        self.host_entry, ipady = self._entry(inner, self.host_var)
-        self.host_entry.configure(width=12)
-        self.host_entry.pack(side="left", fill="x", expand=True, ipady=ipady,
-                             padx=(0, px(theme.COL_GAP)))
+        box = RoundEntry(inner, self.host_var, height=theme.BAR_BUTTON_HEIGHT,
+                         hint="TV IP address")
+        box.pack(side="left", fill="x", expand=True, padx=(0, px(theme.COL_GAP)))
+        self.host_entry = box.entry
         self.host_entry.bind("<Return>", lambda _e: self.toggle_connection())
-        Placeholder(self.host_entry, self.host_var, "TV IP address")
 
         # fill="y" keeps the buttons exactly as tall as the box beside them.
         self.scan_btn = RoundButton(inner, text="Scan", command=self.scan_devices,
-                                    width=54, height=theme.BUTTON_HEIGHT, radius=8,
+                                    width=54, height=theme.BAR_BUTTON_HEIGHT, radius=8,
                                     font=theme.FONT_SMALL,
                                     tooltip="Find Google TV devices on your network")
         self.scan_btn.pack(side="left", fill="y", padx=(0, px(theme.COL_GAP)))
 
         self.connect_btn = RoundButton(inner, text="Connect", command=self.toggle_connection,
-                                       width=76, height=theme.BUTTON_HEIGHT, radius=8,
+                                       width=76, height=theme.BAR_BUTTON_HEIGHT, radius=8,
                                        font=theme.FONT_SMALL, fill=ACCENT, hover=ACCENT_HOVER)
         self.connect_btn.pack(side="left", fill="y")
 
@@ -308,7 +295,8 @@ class RemoteApp:
         pad.pack(pady=px(theme.PANEL_PAD))                 # centred in the panel
 
         def key(text, code, row, column, **kwargs):
-            button = self._key_button(pad, text, code, width=64, **kwargs)
+            button = self._key_button(pad, text, code, width=theme.DPAD_BUTTON_WIDTH,
+                                      height=theme.DPAD_BUTTON_HEIGHT, **kwargs)
             button.grid(row=row, column=column, padx=px(3), pady=px(3))
 
         key("▲", keycodes.KEYCODE_DPAD_UP, 0, 1, font=theme.FONT_ICON, repeat=True)
@@ -351,22 +339,20 @@ class RemoteApp:
     def _build_text_row(self, parent) -> None:
         row = self._section(parent)
         self.text_var = tk.StringVar()
-        self.text_entry, ipady = self._entry(row, self.text_var)
-        self.text_entry.configure(width=10)              # it stretches; keep the minimum small
-        self.text_entry.pack(side="left", fill="x", expand=True, ipady=ipady,
-                             padx=(0, px(theme.COL_GAP)))
+        box = RoundEntry(row, self.text_var, height=theme.BUTTON_HEIGHT,
+                         hint="Text for the TV")
+        box.pack(side="left", fill="x", expand=True, padx=(0, px(theme.COL_GAP)))
+        self.text_entry = box.entry
         self.text_entry.bind("<Return>", lambda _e: self.send_text())
-        Placeholder(self.text_entry, self.text_var, "Text for the TV")
         tools = [
-            ("⌫", self.backspace, "Delete the last character on the TV"),
-            ("✕", self.clear_text, "Clear the text field on the TV"),
-            ("➤", self.send_text, "Type this text on the TV  (Enter)"),
+            (icons.backspace, self.backspace, "Delete the last character on the TV"),
+            (icons.clear, self.clear_text, "Clear the text field on the TV"),
+            (icons.send, self.send_text, "Type this text on the TV  (Enter)"),
         ]
-        for index, (glyph, command, tip) in enumerate(tools):
+        for index, (icon, command, tip) in enumerate(tools):
             last = index == len(tools) - 1
-            button = RoundButton(row, text=glyph, command=command, width=40,
-                                 height=theme.BUTTON_HEIGHT, radius=8,
-                                 font=theme.FONT_ICON, tooltip=tip)
+            button = RoundButton(row, icon=icon, icon_size=22, command=command, width=48,
+                                 height=theme.BUTTON_HEIGHT, radius=8, tooltip=tip)
             button.pack(side="left", fill="y", padx=(0, 0 if last else px(theme.COL_GAP)))
             self._buttons.append(button)
 
@@ -379,7 +365,7 @@ class RemoteApp:
         for index, chunk in enumerate(balanced_rows(apps, MAX_APPS_PER_ROW)):
             row = self._row(section, gap=theme.ROW_GAP if index else 0)
             for name, link in chunk:
-                button = RoundButton(row, icon=app_icon(name), width=44, icon_size=30,
+                button = RoundButton(row, icon=icons.app_icon(name), width=44, icon_size=30,
                                      height=theme.BUTTON_HEIGHT, tooltip=name,
                                      command=lambda l=link, n=name: self.launch_app(l, n))
                 self._buttons.append(row.add(button))

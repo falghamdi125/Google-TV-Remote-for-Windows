@@ -1,4 +1,4 @@
-"""Custom Tk widgets: a flat rounded button and a hover tooltip."""
+"""Custom Tk widgets: a rounded button, a rounded text box and a hover tooltip."""
 
 from __future__ import annotations
 
@@ -7,13 +7,19 @@ from typing import Callable
 
 from . import theme
 from .theme import (ACCENT, ACCENT_HOVER, BTN, BTN_ACTIVE, BTN_HOVER, FAINT,
-                    METER_FILL, METER_TRACK, MUTED, TEXT, TOOLTIP_BG, px)
+                    FIELD_BORDER, METER_FILL, METER_TRACK, MUTED, TEXT, TOOLTIP_BG, px)
 
 REPEAT_DELAY_MS = 500
 REPEAT_INTERVAL_MS = 120
 FLASH_MS = 110
 LABEL_MARGIN = 22          # unscaled: horizontal room around a text label
 ICON_TAG = "icon"
+
+
+def rounded_rect(x1: float, y1: float, x2: float, y2: float, r: float) -> list[float]:
+    """Polygon points for a rectangle with corner radius ``r``; draw with ``smooth=True``."""
+    return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+            x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
 
 
 class RoundButton(tk.Canvas):
@@ -71,9 +77,7 @@ class RoundButton(tk.Canvas):
     # -- geometry ---------------------------------------------------------
 
     def _outline(self, width: int, height: int) -> list[float]:
-        x1, y1, x2, y2, r = 1, 1, width - 1, height - 1, self._radius
-        return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
-                x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+        return rounded_rect(1, 1, width - 1, height - 1, self._radius)
 
     def _on_configure(self, event) -> None:
         """Redraw to fill whatever size the geometry manager granted."""
@@ -262,7 +266,7 @@ class Placeholder:
             if self.variable.get():
                 self.label.place_forget()
             else:
-                self.label.place(x=px(7), rely=0.5, anchor="w")
+                self.label.place(x=0, rely=0.5, anchor="w")
         except tk.TclError:
             pass                                        # trace fired during teardown
 
@@ -271,6 +275,54 @@ class Placeholder:
             self.label.place_forget()
         except tk.TclError:
             pass
+
+
+class RoundEntry(tk.Canvas):
+    """A text box with rounded corners; the Tk Entry only has square ones.
+
+    A rounded panel drawn on a canvas with a borderless Entry laid inside it,
+    inset so the corners stay visible. The panel shows a hairline at rest and
+    the accent colour while the box has focus. ``entry`` is the real Tk
+    widget: bind keys on it, read it and focus it as usual.
+    """
+
+    def __init__(self, parent, variable: tk.StringVar, height: float, width: float = 100,
+                 radius: float = 8, hint: str = "", font=None) -> None:
+        w, h = px(width), px(height)
+        super().__init__(parent, width=w, height=h, bg=parent["bg"],
+                         highlightthickness=0, bd=0)
+        self._radius = px(radius)
+        self._inset = px(9)
+        self._panel = self.create_polygon(rounded_rect(1, 1, w - 1, h - 1, self._radius),
+                                          smooth=True, splinesteps=24,
+                                          fill=BTN, outline=FIELD_BORDER)
+        self.entry = tk.Entry(self, textvariable=variable, bg=BTN, fg=TEXT,
+                              insertbackground=TEXT, relief="flat", bd=0,
+                              highlightthickness=0, font=font or theme.FONT_SMALL)
+        self._window = self.create_window(self._inset, h / 2, window=self.entry,
+                                          anchor="w", width=w - 2 * self._inset)
+        self.entry.bind("<FocusIn>", lambda _e: self._set_outline(ACCENT), add="+")
+        self.entry.bind("<FocusOut>", lambda _e: self._set_outline(FIELD_BORDER), add="+")
+        self.bind("<Button-1>", lambda _e: self.entry.focus_set())   # the margin counts too
+        self.bind("<Configure>", self._on_configure)
+        if hint:
+            Placeholder(self.entry, variable, hint)
+
+    def _set_outline(self, colour: str) -> None:
+        try:
+            self.itemconfig(self._panel, outline=colour)
+        except tk.TclError:
+            pass                                        # focus moved during teardown
+
+    def _on_configure(self, event) -> None:
+        """Stretch the panel and the Entry to whatever width was granted."""
+        w, h = event.width, event.height
+        try:
+            self.coords(self._panel, *rounded_rect(1, 1, w - 1, h - 1, self._radius))
+            self.coords(self._window, self._inset, h / 2)
+            self.itemconfig(self._window, width=max(1, w - 2 * self._inset))
+        except tk.TclError:
+            pass                                        # <Configure> during teardown
 
 
 class VolumeMeter(tk.Canvas):
