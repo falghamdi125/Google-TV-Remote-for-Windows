@@ -36,9 +36,14 @@ on and pair once.
 
 ## Install
 
+**Installer:** download `GoogleTVRemote-<version>.msi` from the
+[Releases](../../releases) page and run it. It installs for the current
+user only (no administrator rights), adds a Start Menu entry, and can be
+removed from *Settings → Apps*; a newer version installs over an older one.
+
 **Standalone .exe (no Python needed):** download `GoogleTVRemote.exe` from
-the [Releases](../../releases) page and put it anywhere. Pin it to the
-taskbar, or drop a shortcut into `shell:startup` to have it ready at login.
+the same page and put it anywhere. Pin it to the taskbar, or drop a
+shortcut into `shell:startup` to have it ready at login.
 
 **From source:**
 
@@ -215,6 +220,7 @@ for the generated `keycodes.py`.
 | `proto/` | the protocol's `.proto` files, for reference and the tests |
 | `tests/` | unit tests, a mock TV, and the protobufjs cross-check |
 | `tools/` | `gen_keycodes.py`, `render_icons.py` (+ the `icons/*.svg` glyphs), `render_app_icon.py`, `screenshot_ui.py` |
+| `installer/` | the Windows Installer package: `GoogleTVRemote.wxs` and `build_msi.py` (WiX Toolset v3) |
 
 ## Development
 
@@ -225,6 +231,7 @@ python tools/gen_keycodes.py     # regenerate keycodes.py after editing the prot
 python tools/render_icons.py     # re-render the app logos (tools/icons/*.svg -> assets/icons)
 python tools/render_app_icon.py  # re-render the app icon (assets/app.ico and docs/icon.png)
 build_exe.bat                    # dist\GoogleTVRemote.exe
+python installer/build_msi.py    # dist\GoogleTVRemote-<version>.msi, from that .exe
 ```
 
 The Python protobuf encoder is cross-checked against the real
@@ -239,7 +246,7 @@ node tests/make_fixtures.js      # regenerate the TV-side messages the mock TV r
 ```
 
 CI runs all of this on every push. Pushing a `v*` tag builds the `.exe` and
-attaches it to a GitHub release.
+the `.msi` and attaches both to a GitHub release.
 
 ## Troubleshooting
 

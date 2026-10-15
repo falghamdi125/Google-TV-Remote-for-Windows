@@ -54,18 +54,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build the standalone .exe
+      - name: Build the standalone .exe and the .msi installer
         run: |
           pip install -e ".[build]"
           .\build_exe.bat
+          python installer\build_msi.py
 
-      - name: Attach it to the GitHub release (created if missing)
+      - name: Attach them to the GitHub release (created if missing)
         run: |
           $tag = "${{ github.ref_name }}"
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --title "Google TV Remote $tag" --generate-notes
           }
-          gh release upload $tag dist/GoogleTVRemote.exe --clobber
+          $msi = (Get-ChildItem dist\GoogleTVRemote-*.msi).FullName
+          gh release upload $tag dist/GoogleTVRemote.exe $msi --clobber
         env:
           GH_TOKEN: ${{ github.token }}

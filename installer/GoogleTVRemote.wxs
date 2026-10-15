@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Google TV Remote for Windows: the Windows Installer package.
+
+  A per-user install, so no administrator rights: the .exe goes to
+  %LOCALAPPDATA%\Programs\Google TV Remote with a Start Menu entry, and the
+  app shows in Settings > Apps for removal. Settings and the pairing
+  certificate live in %APPDATA%\GoogleTVRemote and are left alone on
+  uninstall. Installing a newer version over an older one upgrades it in
+  place. Built by build_msi.py, which supplies Version, SourceDir and
+  LicenseRtf.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Google TV Remote" Language="1033" Version="$(var.Version)"
+           Manufacturer="Faisal Alghamdi" UpgradeCode="9CAA033F-8CF4-4420-BF45-45D1BC3DA7BA">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"
+             InstallPrivileges="limited" Description="Google TV Remote $(var.Version)"
+             Comments="Desktop remote control for Google TV / Android TV devices" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Google TV Remote is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="app.ico" SourceFile="$(var.SourceDir)\gtvremote\assets\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="app.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/falghamdi125/Google-TV-Remote-for-Windows" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/falghamdi125/Google-TV-Remote-for-Windows/issues" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="Google TV Remote" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+    </Directory>
+
+    <!-- Per-user components key on a registry value, as Windows Installer
+         requires for files under the user profile; the folders they create
+         there are removed again on uninstall. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExe" Guid="D59A2E60-88C3-4AE6-941F-AB2AA346F981">
+        <RegistryValue Root="HKCU" Key="Software\GoogleTVRemote" Name="Installed"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <File Id="GoogleTVRemote.exe" Source="$(var.SourceDir)\dist\GoogleTVRemote.exe" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="0DCD14E0-FAA8-4297-B623-F2063A08150B">
+        <Shortcut Id="StartMenuShortcut" Name="Google TV Remote"
+                  Target="[INSTALLFOLDER]GoogleTVRemote.exe" WorkingDirectory="INSTALLFOLDER"
+                  Icon="app.ico" Description="Remote control for Google TV and Android TV" />
+        <RegistryValue Root="HKCU" Key="Software\GoogleTVRemote" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="Google TV Remote" Level="1" Absent="disallow">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- Welcome and licence, Install, progress, then Finish with a
+         "Start Google TV Remote" box that is ticked by default. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start Google TV Remote" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#GoogleTVRemote.exe]" />
+    <CustomAction Id="LaunchApp" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp">
+        WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed
+      </Publish>
+    </UI>
+  </Product>
+</Wix>
