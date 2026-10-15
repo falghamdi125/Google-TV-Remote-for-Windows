@@ -24,6 +24,8 @@ DEFAULTS: dict = {
     "window_geometry": "",
     "ui_scale": 1.5,
     "auto_connect": True,
+    "natural_scrolling": True,   # wheel over the volume: fingers up = louder (Windows'
+                                 # touchpad default); False for a mouse wheel, forward = louder
     "apps": [],              # [{"name": ..., "link": ...}]; empty = DEFAULT_APPS
     "inputs": [],            # [{"name": ..., "link" | "key": ...}]; empty = per-vendor list
 }
@@ -87,6 +89,26 @@ def remember_device(data: dict, host: str, name: str = "") -> None:
     devices.insert(0, {"name": name or host, "host": host})
     data["devices"] = devices[:MAX_REMEMBERED_DEVICES]
     data["last_host"] = host
+
+
+def device_name(data: dict, host: str) -> str:
+    """The name remembered for the device at ``host``, or "" if it is unknown
+    (or was remembered without a name)."""
+    for device in data.get("devices", []):
+        if isinstance(device, dict) and device.get("host") == host:
+            name = str(device.get("name") or "")
+            return "" if name == host else name
+    return ""
+
+
+def move_device(data: dict, old_host: str, new_host: str) -> None:
+    """A remembered device has turned up at a new address: carry it over."""
+    name = device_name(data, old_host)
+    if not name:
+        return
+    data["devices"] = [d for d in data.get("devices", [])
+                       if isinstance(d, dict) and d.get("host") != old_host]
+    remember_device(data, new_host, name)
 
 
 def app_shortcuts(data: dict) -> list[tuple[str, str]]:

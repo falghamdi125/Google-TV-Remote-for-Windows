@@ -7,6 +7,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -21,6 +22,8 @@ from .theme import (ACCENT, ACCENT_HOVER, BG, BTN, BTN_HOVER, MUTED,
                     PANEL, POWER_BG, POWER_HOVER, TEXT, px)
 from .widgets import EvenRow, RoundButton, RoundEntry, Tooltip, VolumeMeter
 
+log = logging.getLogger(__name__)
+
 APP_TITLE = "Google TV Remote"
 ICON_FILE = "app.ico"
 EVENT_POLL_MS = 50
@@ -28,6 +31,9 @@ AUTO_CONNECT_DELAY_MS = 250
 LOG_MAX_BYTES = 256_000                 # the connection log rotates once at this size
 MAX_APP_LABEL = 44
 MAX_APPS_PER_ROW = 6
+WHEEL_CLICK = 120                       # one click of a mouse wheel, in Tk's delta units
+WHEEL_STEP_MS = 200                     # at most one volume step this often: a flick is one step
+RESCAN_AFTER_FAILURES = 2               # connection attempts failed in a row before a scan
 
 #: Friendly names for the foreground-app readout. Unknown packages are shown
 #: as-is (and truncated), so this only ever improves the common cases.
@@ -72,6 +78,7 @@ SHORTCUTS = [
     ("+   −   M", "Volume up, down, mute"),
     ("Just start typing", "Goes to the TV's text box; Enter submits"),
     ("Ctrl +   Ctrl −   Ctrl 0", "Resize the window, or reset"),
+    ("Mouse wheel", "Volume, over the volume keys or the readout"),
 ]
 
 
@@ -116,6 +123,12 @@ class RemoteApp:
         self._app_text = ""                  # full text behind the fitted app label
         self._volume = (0, 0, False)         # last (level, maximum, muted) from the TV
         self._volume_known = False           # has the TV reported volume this session
+        self._wheel_delta = 0                # scrolling not yet worth a volume step
+        self._wheel_seen = self._wheel_sent = 0.0   # when the wheel last moved / last stepped
+        self._failures = 0                   # connection attempts failed in a row
+        self._scanning = False               # a network scan is under way
+        self._auto_scan = False              # ...started by the app, not the Scan button
+        self._picker: DevicePicker | None = None
         self._help_win: tk.Toplevel | None = None
         self._pump_job: str | None = None
         theme.apply_scale(self.settings.get("ui_scale", theme.DEFAULT_SCALE))
@@ -316,13 +329,16 @@ class RemoteApp:
 
     def _build_volume_row(self, parent) -> None:
         row = self._row(parent)
-        row.add(self._key_button(row, "\U0001f509", keycodes.KEYCODE_VOLUME_DOWN,
-                                 font=theme.FONT_ICON, repeat=True, tooltip="Volume down  (-)"))
+        self.vol_down_btn = row.add(self._key_button(
+            row, "\U0001f509", keycodes.KEYCODE_VOLUME_DOWN, font=theme.FONT_ICON,
+            repeat=True, tooltip="Volume down  (-, or scroll down)"))
         self.mute_btn = self._key_button(row, "\U0001f507", keycodes.KEYCODE_VOLUME_MUTE,
                                          font=theme.FONT_ICON, tooltip="Mute  (M)")
         row.add(self.mute_btn)
-        row.add(self._key_button(row, "\U0001f50a", keycodes.KEYCODE_VOLUME_UP,
-                                 font=theme.FONT_ICON, repeat=True, tooltip="Volume up  (+)"))
+        self.vol_up_btn = row.add(self._key_button(
+            row, "\U0001f50a", keycodes.KEYCODE_VOLUME_UP, font=theme.FONT_ICON,
+            repeat=True, tooltip="Volume up  (+, or scroll up)"))
+        self._volume_row = row                  # the wheel works over the gaps too
 
     def _build_media_row(self, parent) -> None:
         row = self._row(parent)
@@ -403,6 +419,8 @@ class RemoteApp:
         self._volume_label = tk.Label(self._volbox, textvariable=self.volume_var, bg=BG,
                                       fg=MUTED, font=theme.FONT_SMALL, anchor="e")
         self._volume_label.pack(side="left")
+        for widget in (self._vol_speaker, self._vol_meter, self._volume_label):
+            Tooltip(widget, "Scroll here to change the volume")
         self.app_var = tk.StringVar(value="")
         tk.Label(info, textvariable=self.app_var, bg=BG, fg=MUTED,
                  font=theme.FONT_SMALL, anchor="w").pack(side="left", fill="x", expand=True)
@@ -507,6 +525,11 @@ class RemoteApp:
             self.root.bind(sequence, lambda _e: self.set_scale(theme.SCALE - theme.SCALE_STEP))
         self.root.bind("<Control-Key-0>", lambda _e: self.set_scale(theme.DEFAULT_SCALE))
 
+        # The wheel (or a trackpad) over the volume keys or the volume readout
+        # steps the volume. Tk 8.6 hands wheel events to the focused widget,
+        # not the one under the pointer, so bind everywhere and look.
+        self.root.bind_all("<MouseWheel>", self._on_wheel)
+
     def _typing_in_app(self) -> bool:
         """True while one of the window's own text boxes has keyboard focus."""
         return self.root.focus_get() in (self.text_entry, self.host_entry)
@@ -543,6 +566,54 @@ class RemoteApp:
 
     def _type_char(self, char: str) -> None:
         self._edit_tv_text(lambda: self.client.send_text(char), f"Typed {char!r} on the TV")
+
+    # -------------------------------------------------------------- wheel --
+
+    def _on_wheel(self, event):
+        if event.state & 0x1:                   # Shift: a sideways trackpad swipe
+            return None
+        try:
+            widget = self.root.winfo_containing(*self.root.winfo_pointerxy())
+        except (tk.TclError, KeyError):         # a window of another app, or a menu
+            return None
+        return self._scroll_volume(event.delta, widget)
+
+    def _over_volume(self, widget) -> bool:
+        """Is ``widget`` the volume row (keys and the gaps between them), the
+        volume readout, or something inside one of them?"""
+        while widget is not None:
+            if widget in (self._volume_row, self._volbox):
+                return True
+            widget = widget.master
+        return False
+
+    def _scroll_volume(self, delta: int, widget, now: float | None = None) -> str | None:
+        """Wheel movement ``delta`` (Tk units: 120 per click) with the pointer
+        over ``widget``, when that is in the volume area: one volume step per
+        click's worth of movement, and no more than one every WHEEL_STEP_MS,
+        so a flick or a swipe is a single step and rolling on is a steady
+        few a second. A trackpad sends many small deltas, so they are summed;
+        a pause or a change of direction starts the count afresh.
+
+        Which way is louder is the "natural_scrolling" setting: on a touchpad
+        with Windows' default direction fingers up is louder; a mouse wheel
+        reports the opposite, so there forward is louder with it off. Sent
+        like the + and - hotkeys: the keys on screen are not flashed."""
+        if not self._over_volume(widget):
+            return None
+        now = time.monotonic() if now is None else now
+        pause = WHEEL_STEP_MS / 1000
+        if now - self._wheel_seen > pause or (delta > 0) != (self._wheel_delta > 0):
+            self._wheel_delta = 0
+        self._wheel_delta += delta
+        self._wheel_seen = now
+        if abs(self._wheel_delta) < WHEEL_CLICK or now - self._wheel_sent < pause:
+            return "break"
+        self._wheel_delta = 0
+        self._wheel_sent = now
+        louder = (delta < 0) if self.settings.get("natural_scrolling", True) else (delta > 0)
+        self.send_key(keycodes.KEYCODE_VOLUME_UP if louder else keycodes.KEYCODE_VOLUME_DOWN)
+        return "break"
 
     # ----------------------------------------------------------- actions --
 
@@ -584,6 +655,7 @@ class RemoteApp:
             messagebox.showinfo(APP_TITLE, "Enter your TV's IP address, or press Scan.")
             return
         self.disconnect(update_ui=False)
+        self._failures = 0
         self._set_status("connecting", f"Connecting to {host}...")
         self.client = RemoteClient(
             host,
@@ -703,8 +775,20 @@ class RemoteApp:
             return
         self._set_status("connected", done)
 
-    def scan_devices(self) -> None:
-        self._set_status("connecting", "Scanning the network...")
+    def scan_devices(self, auto: bool = False) -> None:
+        """Look for TVs on the network; the result arrives as a "devices"
+        event. With ``auto`` the app is looking on its own because the TV's
+        address stopped answering (see _follow_tv): no dialogs at the end."""
+        if self._scanning:
+            return
+        self._scanning, self._auto_scan = True, auto
+        if auto:
+            host = self.host_var.get().strip()
+            log.info("%s is not answering: scanning for the TV", host)
+            self._set_status("reconnecting",
+                             f"Cannot reach {host} - looking for the TV on the network...")
+        else:
+            self._set_status("connecting", "Scanning the network...")
         self.scan_btn.set_enabled(False)
 
         def worker():
@@ -712,12 +796,48 @@ class RemoteApp:
                 devices = discovery.discover()
             except OSError:
                 devices = []
-            self._post(("devices", devices))
+            self._post(("devices", devices, auto))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _show_devices(self, devices: list[discovery.Device]) -> None:
+    def _note_failure(self) -> None:
+        """A connection attempt failed. After a few in a row the TV may have
+        moved (a new DHCP lease, say): look for it while the retries go on."""
+        self._failures += 1
+        if self._failures % RESCAN_AFTER_FAILURES == 0:
+            self.scan_devices(auto=True)
+
+    def _follow_tv(self, devices: list[discovery.Device]) -> None:
+        """A scan started because the TV's address stopped answering has come
+        back: switch to the TV if it turned up elsewhere, else keep trying."""
+        host = self.host_var.get().strip()
+        found = [device for device in devices if device.host != host]
+        name = config.device_name(self.settings, host)
+        familiar = [device for device in found if name and device.name == name]
+        if len(familiar) == 1:
+            found = familiar
+        if not found:
+            log.info("No TV answered the scan; still trying %s", host)
+            self._set_status("reconnecting", f"No TV answered the scan - still trying {host}")
+            return
+        if len(found) == 1:
+            device = found[0]
+            log.info("The TV answers at %s now (was %s): switching", device.host, host)
+            config.move_device(self.settings, host, device.host)
+            self.host_var.set(device.host)
+            self.connect()
+            return
+        self._set_status("reconnecting",
+                         f"Found {len(found)} TVs - choose one, or keep trying {host}")
+        if self._picker is None or not self._picker.winfo_exists():
+            self._picker = DevicePicker(self.root, found, self._on_device_chosen)
+
+    def _show_devices(self, devices: list[discovery.Device], auto: bool = False) -> None:
         self.scan_btn.set_enabled(True)
+        self._scanning = self._auto_scan = False
+        if auto:
+            self._follow_tv(devices)
+            return
         if not devices:
             self._set_status("error", "No devices found - enter the IP manually.")
             messagebox.showinfo(
@@ -732,7 +852,7 @@ class RemoteApp:
             self._set_status("disconnected", "Found " + devices[0].label)
             self.connect()
             return
-        DevicePicker(self.root, devices, self._on_device_chosen)
+        self._picker = DevicePicker(self.root, devices, self._on_device_chosen)
         self._set_status("disconnected", f"Found {len(devices)} devices")
 
     def _on_device_chosen(self, device: discovery.Device) -> None:
@@ -849,7 +969,14 @@ class RemoteApp:
         kind = event[0]
         if kind in ("state", "status"):
             _, status, detail = event
-            self._set_status(status, detail)
+            if kind == "state" and status == "connected":
+                self._failures = 0
+            elif kind == "state" and status == "error":
+                self._note_failure()
+            # While the app is looking for the TV, say so rather than echo
+            # the retries still going on underneath.
+            if not (self._auto_scan and status in ("connecting", "reconnecting", "error")):
+                self._set_status(status, detail)
             if status == "connected":
                 self._show_connected(True)
             elif status in ("error", "disconnected", "reconnecting", "unpaired"):
@@ -869,7 +996,7 @@ class RemoteApp:
             elif self._last_status == "connected" and self.client:
                 self._set_status("connected", f"Connected to {self.client.host}")
         elif kind == "devices":
-            self._show_devices(event[1])
+            self._show_devices(event[1], auto=event[2])
         elif kind == "pair_code":
             self._prompt_code(event[1], event[2])
         elif kind == "pair_ok":

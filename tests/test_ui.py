@@ -98,6 +98,65 @@ class WindowTest(unittest.TestCase):
             self.app._handle_event(("state", "unpaired", "not paired"))
         repair.assert_called_once_with(confirm=False)
 
+    def test_two_failed_attempts_start_a_scan(self):
+        self.app.host_var.set("10.0.0.5")
+        self.app.client = mock.Mock(is_connected=False)
+        with mock.patch.object(self.app, "scan_devices") as scan:
+            self.app._handle_event(("state", "error", "Cannot reach 10.0.0.5"))
+            self.app._handle_event(("state", "reconnecting", "Reconnecting in 1s..."))
+            scan.assert_not_called()
+            self.app._handle_event(("state", "error", "Cannot reach 10.0.0.5"))
+            scan.assert_called_once_with(auto=True)
+            self.app._handle_event(("state", "connected", "Connected"))      # resets the count
+            self.app._handle_event(("state", "error", "The TV reset the connection."))
+            self.assertEqual(scan.call_count, 1)
+
+        # While the app is looking, the status says so; the retries stay quiet.
+        self.app._auto_scan = True
+        self.app._set_status("reconnecting", "looking for the TV")
+        self.app._handle_event(("state", "reconnecting", "Reconnecting in 2s..."))
+        self.assertEqual(self.app.status_var.get(), "looking for the TV")
+        self.app._handle_event(("state", "connected", "Connected to 10.0.0.5"))
+        self.assertEqual(self.app.status_var.get(), "Connected to 10.0.0.5")
+
+    def test_a_scan_follows_the_tv_to_its_new_address(self):
+        Device = window.discovery.Device
+        self.app.host_var.set("10.0.0.5")
+        self.app.settings["devices"] = [{"name": "Living room", "host": "10.0.0.5"}]
+        with mock.patch.object(self.app, "connect") as connect, \
+                mock.patch.object(window, "DevicePicker") as picker:
+            # Nothing found, or only the same address: keep trying, no dialogs.
+            self.app._show_devices([], auto=True)
+            self.app._show_devices([Device("Living room", "10.0.0.5")], auto=True)
+            connect.assert_not_called()
+            window.messagebox.showinfo.assert_not_called()
+            self.assertEqual(self.app.host_var.get(), "10.0.0.5")
+            self.assertIn("still trying 10.0.0.5", self.app.status_var.get())
+
+            # Several TVs: the one remembered by name wins, and is remembered anew.
+            self.app._show_devices([Device("Bedroom", "10.0.0.7"),
+                                    Device("Living room", "10.0.0.9")], auto=True)
+            connect.assert_called_once_with()
+            self.assertEqual(self.app.host_var.get(), "10.0.0.9")
+            self.assertEqual(window.config.device_name(self.app.settings, "10.0.0.9"), "Living room")
+            self.assertEqual(window.config.device_name(self.app.settings, "10.0.0.5"), "")
+            picker.assert_not_called()
+
+            # Several unfamiliar TVs: ask, and only once.
+            connect.reset_mock()
+            strangers = [Device("A", "10.0.0.1"), Device("B", "10.0.0.2")]
+            self.app._show_devices(strangers, auto=True)
+            self.app._show_devices(strangers, auto=True)
+            picker.assert_called_once()
+            connect.assert_not_called()
+            self.assertIn("choose one", self.app.status_var.get())
+
+            # One TV somewhere else: go there.
+            self.app._show_devices([Device("Living room", "10.0.0.12")], auto=True)
+            self.assertEqual(self.app.host_var.get(), "10.0.0.12")
+            connect.assert_called_once_with()
+        self.assertTrue(self.app.scan_btn._enabled)
+
     def test_sending_without_a_connection_is_harmless(self):
         self.app.send_key(3)
         self.app.toggle_power()
@@ -217,6 +276,60 @@ class WindowTest(unittest.TestCase):
         self.app.disconnect()
         self.assertEqual(self.app.volume_var.get(), "")
         self.assertFalse(self.app.mute_btn._active)
+
+    def test_wheel_over_the_volume_area_steps_the_volume(self):
+        client = mock.Mock(is_connected=True)
+        self.app.client = client
+        self.app._handle_event(("state", "connected", "Connected"))
+        up, down = keycodes.KEYCODE_VOLUME_UP, keycodes.KEYCODE_VOLUME_DOWN
+        sent = lambda: [call.args[0] for call in client.send_key.call_args_list]  # noqa: E731
+        scroll = self.app._scroll_volume
+        pause = window.WHEEL_STEP_MS / 1000
+
+        # Natural scrolling (the default): fingers up, which Windows reports
+        # as a negative delta, is louder. One click of the wheel is one step.
+        scroll(-120, self.app._vol_meter, now=1.0)                  # over the bar
+        scroll(120, self.app.vol_down_btn, now=2.0)                 # over a key
+        scroll(120, self.app._volume_row, now=3.0)                  # over a gap between keys
+        self.assertEqual(sent(), [up, down, down])
+        for button in (self.app.vol_down_btn, self.app.vol_up_btn):     # a key press, not a click
+            self.assertNotEqual(button.itemcget(button._shape, "fill"), theme.ACCENT,
+                                "scrolling must not flash the key")
+
+        client.send_key.reset_mock()                                # a trackpad swipe: 12 x -30
+        for i in range(12):                                         # within 120 ms
+            scroll(-30, self.app._volume_label, now=10.0 + i * 0.01)
+        self.assertEqual(sent(), [up], "a swipe is one step, however far it goes")
+        scroll(-30, self.app._volume_label, now=10.03 + pause + 0.01)   # still swiping: the next
+        self.assertEqual(sent(), [up, up])
+
+        client.send_key.reset_mock()
+        scroll(-120, self.app.vol_up_btn, now=20.0)
+        scroll(-120, self.app.vol_up_btn, now=20.05)                # a flick: too soon, dropped
+        scroll(-120, self.app.vol_up_btn, now=20.05 + pause + 0.01) # rolling on: the next step
+        self.assertEqual(sent(), [up, up])
+
+        client.send_key.reset_mock()
+        scroll(-60, self.app._vol_speaker, now=30.0)                # half a click...
+        scroll(-60, self.app._vol_speaker, now=31.0)                # ...a new gesture starts over
+        scroll(60, self.app._vol_speaker, now=31.05)                # ...the other way: starts over
+        scroll(-120, self.app.host_entry, now=32.0)                 # elsewhere in the window
+        scroll(-120, None, now=33.0)                                # outside the window
+        self.assertEqual(sent(), [])
+
+        self.app.settings["natural_scrolling"] = False              # a mouse wheel: forward = louder
+        scroll(120, self.app._vol_meter, now=40.0)
+        scroll(-120, self.app._vol_meter, now=41.0)
+        self.assertEqual(sent(), [up, down])
+
+        # The Tk event itself: only what is under the pointer matters.
+        client.send_key.reset_mock()
+        with mock.patch.object(self.root, "winfo_containing", return_value=self.app.vol_up_btn):
+            self.app._on_wheel(mock.Mock(delta=120, state=0))
+            self.app._on_wheel(mock.Mock(delta=120, state=1))     # sideways swipe: ignored
+        with mock.patch.object(self.root, "winfo_containing", return_value=None):
+            self.app._on_wheel(mock.Mock(delta=120, state=0))
+        self.assertEqual(sent(), [up])
 
     def test_shortcuts_popup_opens_once_and_reopens(self):
         self.app._show_shortcuts()

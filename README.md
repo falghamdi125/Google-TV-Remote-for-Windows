@@ -27,7 +27,8 @@ on and pair once.
 * **Live status from the TV**: volume, power state, foreground app, and
   whether a text box is waiting for input.
 * **Zero setup on the TV**: find it with a network scan, pair once with the
-  on-screen code, and the app auto-connects and auto-reconnects from then on.
+  on-screen code, and the app auto-connects and auto-reconnects from then on,
+  and follows the TV to its new address if that ever changes.
 * **One file**: a standalone `.exe` with no runtime to install; from source
   it needs only Python and `cryptography` - the protocol (TLS, protobuf,
   mDNS) is implemented on the standard library.
@@ -104,6 +105,7 @@ The on-screen buttons cover everything the keyboard does, plus:
 | Input | Opens a menu of the TV's inputs. On TCL sets these switch directly (HDMI 1-4, AV, tuner); other makers get the input-picker / HDMI key codes, which only some TVs honour. See *Settings* to add your own |
 | Text box + ➤ | Sends a whole line to the TV's text box in one go; ⌫ deletes the last character on the TV and ✕ clears the field |
 | Apps | One-tap icons for YouTube, Netflix, Prime Video, Disney+ and Spotify (hover for the name) |
+| Mouse wheel | Scrolling over the volume keys or the volume readout steps the volume, no faster than five steps a second. On a touchpad fingers up is louder; for a mouse wheel see *Settings* |
 
 Arrow and volume buttons auto-repeat when held. The status bar shows the
 live volume, power state and foreground app, all pushed by the TV.
@@ -111,7 +113,15 @@ live volume, power state and foreground app, all pushed by the TV.
 ### Settings
 
 `%APPDATA%\GoogleTVRemote\settings.json` remembers the last TV, the window
-size and position, and the UI scale. The app buttons can be replaced there:
+size and position, and the UI scale.
+
+`"natural_scrolling"` (default `true`) is which way the wheel turns the
+volume. With Windows' default touchpad setting (*Downwards motion scrolls
+up*) the volume follows your fingers: up is louder. A mouse wheel reports
+the opposite, so with a mouse set it to `false` to make rolling the wheel
+forward louder.
+
+The app buttons can be replaced there:
 
 ```json
 "apps": [
@@ -201,9 +211,10 @@ for the generated `keycodes.py`.
 | `gtvremote/keycodes.py` | Android key codes, generated from the proto |
 | `gtvremote/ui/` | tkinter interface: `theme.py`, `widgets.py`, `icons.py`, `window.py` |
 | `gtvremote/assets/icons/` | the app logos as PNGs at every size, rendered by `tools/render_icons.py` |
+| `gtvremote/assets/app.ico` | the window and taskbar icon, rendered by `tools/render_app_icon.py` |
 | `proto/` | the protocol's `.proto` files, for reference and the tests |
 | `tests/` | unit tests, a mock TV, and the protobufjs cross-check |
-| `tools/` | `gen_keycodes.py`, `render_icons.py` (+ the `icons/*.svg` glyphs), `screenshot_ui.py` |
+| `tools/` | `gen_keycodes.py`, `render_icons.py` (+ the `icons/*.svg` glyphs), `render_app_icon.py`, `screenshot_ui.py` |
 
 ## Development
 
@@ -212,6 +223,7 @@ pip install -e ".[build,dev]"
 python -m unittest -v            # protocol vs. a mock TV, UI, parsers, discovery
 python tools/gen_keycodes.py     # regenerate keycodes.py after editing the proto
 python tools/render_icons.py     # re-render the app logos (tools/icons/*.svg -> assets/icons)
+python tools/render_app_icon.py  # re-render the app icon (assets/app.ico and docs/icon.png)
 build_exe.bat                    # dist\GoogleTVRemote.exe
 ```
 
@@ -233,7 +245,10 @@ attaches it to a GitHub release.
 
 **"Cannot reach ..."** - the TV is off, asleep, or on another network/VLAN.
 Many TVs stop answering in deep standby; enable *Networked standby* /
-*Remote start* in the TV's power settings.
+*Remote start* in the TV's power settings. After two failed attempts the
+app scans the network by itself: if the TV answers from a different address
+(a new DHCP lease) it connects there instead; *No TV answered the scan*
+means it is off or unreachable, and the retries carry on.
 
 **The connection drops now and then** - TVs and Wi-Fi hops reset an idle
 session from time to time. The app reconnects within half a second (a key

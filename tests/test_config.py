@@ -66,6 +66,22 @@ class RememberDeviceTest(unittest.TestCase):
         self.assertEqual(len(data["devices"]), config.MAX_REMEMBERED_DEVICES)
         self.assertEqual(data["devices"][0]["name"], data["devices"][0]["host"])
 
+    def test_a_device_can_be_looked_up_and_moved_to_a_new_address(self):
+        data = {"devices": []}
+        config.remember_device(data, "10.0.0.1", "Bedroom")
+        config.remember_device(data, "10.0.0.2")                 # paired without a name
+        self.assertEqual(config.device_name(data, "10.0.0.1"), "Bedroom")
+        self.assertEqual(config.device_name(data, "10.0.0.2"), "", "its own address is no name")
+        self.assertEqual(config.device_name(data, "10.0.0.9"), "")
+
+        config.move_device(data, "10.0.0.1", "10.0.0.7")           # a new DHCP lease
+        self.assertEqual(config.device_name(data, "10.0.0.7"), "Bedroom")
+        self.assertEqual(config.device_name(data, "10.0.0.1"), "")
+        self.assertEqual(data["last_host"], "10.0.0.7")
+        before = [dict(d) for d in data["devices"]]
+        config.move_device(data, "10.0.0.9", "10.0.0.8")           # unknown: nothing to carry
+        self.assertEqual(data["devices"], before)
+
 
 class AppShortcutsTest(unittest.TestCase):
     def test_empty_setting_uses_defaults(self):
